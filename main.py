@@ -1,0 +1,60 @@
+# main.py
+import streamlit as st
+from datetime import datetime
+import pandas as pd
+
+# 1. 导入配置和数据引擎
+from config import API_KEY, SERIES_IDS, CSS_STYLE
+from data_engine import get_fred_data
+
+# 2. 导入各个业务模块
+from modules.dashboard import render_dashboard_standalone
+from modules.module_a import render_module_a
+from modules.module_b import render_module_b
+from modules.module_c import render_module_c
+from modules.module_d import render_module_d
+
+# ==========================================
+# 页面初始化
+# ==========================================
+st.set_page_config(page_title="宏观金融环境量化", layout="wide", page_icon="📈")
+st.markdown(CSS_STYLE, unsafe_allow_html=True)
+
+st.title("宏观金融环境模块因子量化")
+
+# ==========================================
+# 数据加载
+# ==========================================
+with st.spinner('正在同步美联储全量数据...'):
+    df_all = get_fred_data(API_KEY, SERIES_IDS, start_date='2010-01-01')
+
+# ==========================================
+# 主逻辑
+# ==========================================
+if not df_all.empty:
+    latest_date = df_all.index[-1]
+    date_display = f"{datetime.now().strftime('%Y-%m-%d')} (实时)" if latest_date > datetime.now() else latest_date.strftime('%Y-%m-%d')
+    st.markdown(f"#### 📅 数据截至: **{date_display}**")
+    st.markdown("---")
+
+    # 定义 Tabs
+    tab_dash, tab1, tab2, tab3, tab4 = st.tabs([
+        " DASHBOARD", 
+        "A. 系统流动性", 
+        "B. 资金价格与摩擦",
+        "C. 国债期限结构",
+        "D. 实际利率与通胀"
+    ])
+    
+    with tab_dash:
+        render_dashboard_standalone(df_all)
+    with tab1:
+        render_module_a(df_all)
+    with tab2:
+        render_module_b(df_all)
+    with tab3:
+        render_module_c(df_all)
+    with tab4:
+        render_module_d(df_all)
+else:
+    st.error("数据加载失败，请检查网络或 API Key。")
