@@ -7,6 +7,7 @@ import pandas as pd
 from fredapi import Fred
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import plotly.express as px
 
 # ==========================================
 # 0. 核心配置API
@@ -149,8 +150,11 @@ def render_module_a(df_all):
     c1, c2, c3, c4 = st.columns(4)
     score_color = "#09ab3b" if latest['Total_Score'] > 50 else "#ff2b2b"
     c1.markdown(f"""
-        <div class="metric-card"><div class="metric-label">A模块综合得分（周频）</div>
-        <div class="metric-value" style="color: {score_color}">{latest['Total_Score']:.1f}</div></div>
+        <div class="metric-card">
+        <div class="metric-label">A模块综合得分（周频）</div>
+        <div class="metric-value" style="color: {score_color}">{latest['Total_Score']:.1f}</div>
+        <div class="metric-label">vs上周: {latest['Total_Score'] - prev['Total_Score']:.1f}</div>
+        </div>
     """, unsafe_allow_html=True)
     
     c2.metric("净流动性 (Net Liq)", f"${latest['Net_Liquidity']/1000000:.2f} T", 
@@ -393,6 +397,7 @@ def render_module_b(df_raw):
     df_view = df[df.index >= '2021-01-01'].copy()
     latest = df.iloc[-1]
     prev = df.iloc[-2]
+    prev_week = df.iloc[-8]
     
     # --- KPI 卡片 ---
     c1, c2, c3, c4 = st.columns(4)
@@ -402,22 +407,23 @@ def render_module_b(df_raw):
         <div class="metric-card">
             <div class="metric-label">B模块综合得分(日频)</div>
             <div class="metric-value" style="color: {score_color}">{latest['Total_Score']:.1f}</div>
+            <div class="metric-label">vs上周: {latest['Total_Score'] - prev_week['Total_Score']:.1f}</div>
         </div>
     """, unsafe_allow_html=True)
     
     c2.metric(
         "担保隔夜融资利率(SOFR)", 
         f"{latest['SOFR']:.2f}%", 
-        f"{(latest['SOFR'] - prev['SOFR']):.2f}%", 
+        f"{(latest['SOFR'] - prev_week['SOFR']):.2f}%(vs上周)", 
         delta_color="inverse"
     )
     
     spread_val_bps = latest['F1_Spread'] * 100
-    prev_spread_bps = prev['F1_Spread'] * 100
+    prev_week_spread_bps = prev_week['F1_Spread'] * 100
     c3.metric(
         "走廊摩擦 (SOFR - IORB)", 
         f"{spread_val_bps:.1f} bps", 
-        f"{(spread_val_bps - prev_spread_bps):.1f} bps", 
+        f"{(spread_val_bps - prev_week_spread_bps):.1f} bps(vs上周)", 
         delta_color="inverse"
     )
     
@@ -431,7 +437,7 @@ def render_module_b(df_raw):
         srf_str, srf_color = f"${srf_val:.0f} B", "inverse"
     
     c4.metric("急救室用量 (SRF)", srf_str, 
-              f"{(latest['RPONTSYD'] - prev['RPONTSYD']):.0f}", 
+              f"{(latest['RPONTSYD'] - prev_week['RPONTSYD']):.0f}", 
               delta_color=srf_color)
     
     # --- 细分得分 ---
@@ -499,7 +505,7 @@ def render_module_b(df_raw):
     )
     st.plotly_chart(fig_corridor, use_container_width=True)
     
-    # --- 图表3: 天花板摩擦 (优化版) ---
+    # --- 图表3: 天花板摩擦  ---
     pos_spread = (df_view['F1_Spread'] * 100).clip(lower=0)
     neg_spread = (df_view['F1_Spread'] * 100).clip(upper=0)
     
@@ -726,7 +732,7 @@ def render_module_c(df_raw):
 
     # --- 2. 综合得分 ---
     # 权重: 曲线形态(利差)通常比绝对水平更能预测衰退/复苏
-    df['Total_Score'] = (
+    df['Total_Score1'] = (
         df['Score_Curve_2s10s'] * 0.30 + 
         df['Score_Curve_3m10s'] * 0.30 +
         df['Score_10Y'] * 0.20 +
@@ -734,27 +740,69 @@ def render_module_c(df_raw):
         df['Score_30Y'] * 0.10
     )
 
+    # 10Y/30Y 双重动量惩罚
+    
+    slope_10 = df['DGS10'].diff(60)
+    slope_30 = df['DGS30'].diff(60)
+    
+    df['Max_Slope'] = pd.concat([slope_10, slope_30], axis=1).max(axis=1)
+    
+    def get_slope_penalty(s):
+        # s = 20天内利率上涨了多少bp
+        if s > 0.50: return 0.2
+        elif s > 0.30: return 0.6 
+        elif s > 0.15: return 0.8
+        else: return 1.0
+
+    df['Penalty_Factor'] = df['Max_Slope'].apply(get_slope_penalty)
+
+    # 最终分 = 基础分(Part 1) * 斜率惩罚系数
+    df['Total_Score'] = df['Total_Score1'] * df['Penalty_Factor']
+
     # --- 3. 页面展示 ---
     latest = df.iloc[-1]
     prev = df.iloc[-2]
+    prev_week = df.iloc[-8]
+    pf = latest['Penalty_Factor']
+    ms = latest['Max_Slope']
+
+    if pf < 1.0:
+        if pf == 0.2:
+            lvl, col = "🔴 红色极危 (CRITICAL)", "error"
+        elif pf == 0.6:
+            lvl, col = "🟠 橙色警戒 (WARNING)", "warning"
+        else:
+            lvl, col = "🟡 黄色提示 (NOTICE)", "info"
+
+        st.error(f"""
+        **{lvl}** | **触发动量惩罚机制**
+        * **原因**: 10Y/30Y 美债收益率在60天内快速拉升 **+{ms*100:.1f} bps**。
+        * **后果**: 基础得分被打 **{pf*10:.0f} 折**。
+        * **建议**: 利率急涨杀估值，请注意回避高久期资产。
+        """)
+    else:
+        st.success(f"🟢 **动量监测正常**: 长端利率走势平稳 (60天最大变动: {ms*100:.1f} bps)")
 
     # KPI 卡片
     c1, c2, c3, c4 = st.columns(4)
     score_color = "#09ab3b" if latest['Total_Score'] > 50 else "#ff2b2b"
     
     c1.markdown(f"""
-        <div class="metric-card"><div class="metric-label">C模块综合得分 (日频)</div>
-        <div class="metric-value" style="color: {score_color}">{latest['Total_Score']:.1f}</div></div>
+        <div class="metric-card">
+        <div class="metric-label">C模块综合得分 (日频)</div>
+        <div class="metric-value" style="color: {score_color}">{latest['Total_Score']:.1f}</div>
+        <div class="metric-label">vs上周: {latest['Total_Score'] - prev_week['Total_Score']:.1f}</div>
+        </div>
     """, unsafe_allow_html=True)
 
-    c2.metric("10Y 基准利率", f"{latest['DGS10']:.2f}%", f"{(latest['DGS10']-prev['DGS10'])*100:.0f} bps", delta_color="inverse")
+    c2.metric("10Y 基准利率", f"{latest['DGS10']:.2f}%", f"{(latest['DGS10']-prev_week['DGS10'])*100:.0f} bps(vs上周)", delta_color="inverse")
     
     # 利差颜色逻辑: 倒挂(负数)为红
     spread_2s10s = latest['T10Y2Y']
     s_color = "normal" if spread_2s10s > 0 else "inverse"
-    c3.metric("10Y-2Y 关键利差", f"{spread_2s10s:.2f}%", f"{(spread_2s10s-prev['T10Y2Y'])*100:.0f} bps", delta_color=s_color)
+    c3.metric("10Y-2Y 关键利差", f"{spread_2s10s:.2f}%", f"{(spread_2s10s-prev_week['T10Y2Y'])*100:.0f} bps(vs上周)", delta_color=s_color)
     
-    c4.metric("30Y 长端利率", f"{latest['DGS30']:.2f}%", f"{(latest['DGS30']-prev['DGS30'])*100:.0f} bps", delta_color="inverse")
+    c4.metric("30Y 长端利率", f"{latest['DGS30']:.2f}%", f"{(latest['DGS30']-prev_week['DGS30'])*100:.0f} bps(vs上周)", delta_color="inverse")
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("##### 🧩 因子细分得分")
@@ -773,17 +821,19 @@ def render_module_c(df_raw):
     st.divider()
 
     # --- 图表区 ---
+    # 布局改为：上面两个小图，下面一个大长图
     col_chart1, col_chart2 = st.columns(2)
 
+    # 图1: 全期限曲线 (Snapshot)
     with col_chart1:
         fig_curve = go.Figure()
         
         # 1. 定义全期限列表 (X轴)
         terms_label = ['1M', '3M', '6M', '1Y', '2Y', '3Y', '5Y', '7Y', '10Y', '20Y', '30Y']
-        # 2. 对应的列名 (确保 series_ids 里有这些 key)
+        # 2. 对应的列名
         terms_col = ['DGS1MO', 'DGS3MO', 'DGS6MO', 'DGS1', 'DGS2', 'DGS3', 'DGS5', 'DGS7', 'DGS10', 'DGS20', 'DGS30']
         
-        # 3. 提取当前数据 (处理可能存在的 NaN，如果某期限没数据则不画点)
+        # 3. 提取当前数据
         current_rates = [latest.get(col, None) for col in terms_col]
         
         # 4. 绘制当前曲线
@@ -792,11 +842,11 @@ def render_module_c(df_raw):
             y=current_rates, 
             mode='lines+markers', 
             name='当前曲线 (Now)', 
-            line=dict(color='#0068c9', width=3, shape='spline'), # shape='spline' 让线条更平滑
+            line=dict(color='#0068c9', width=3, shape='spline'), 
             marker=dict(size=8)
         ))
         
-        # 5. 绘制对比曲线 (例如：1个月前)
+        # 5. 绘制对比曲线 (1个月前)
         try:
             ago_idx = df.index.get_loc(latest.name - timedelta(days=30), method='nearest')
             ago_row = df.iloc[ago_idx]
@@ -815,7 +865,7 @@ def render_module_c(df_raw):
 
         fig_curve.update_layout(
             title="🇺🇸 美债全期限收益率曲线 (Full Yield Curve)", 
-            height=400,
+            height=350,
             yaxis_title="Yield (%)", 
             hovermode="x unified",
             paper_bgcolor='rgba(0,0,0,0)', 
@@ -837,7 +887,7 @@ def render_module_c(df_raw):
                                       line=dict(color='#333'), fill='tozeroy', 
                                       fillcolor='rgba(9, 171, 59, 0.2)')) # 默认为绿
         
-        # 添加红色倒挂部分 (简化显示：0轴以下为红)
+        # 添加红色倒挂部分
         fig_spread.add_hrect(y0=-2, y1=0, fillcolor="red", opacity=0.1, line_width=0, annotation_text="倒挂警示区 (衰退)")
         
         fig_spread.update_layout(title="10Y-2Y 关键利差趋势", height=350,
@@ -845,19 +895,51 @@ def render_module_c(df_raw):
                                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig_spread, use_container_width=True)
 
+    # [新增] 图3: US Rates 历史走势 (仿 MacroMicro)
+    st.markdown("### US Rates: 全期限 利率历史走势")
+    
+    # 准备绘图数据 (只取最近3年，避免图太密)
+    df_trend = df[df.index >= '2021-01-01'].copy()
+    
+    # 使用 Plotly Express 快速画多线图
+    fig_trend = px.line(df_trend, x=df_trend.index, 
+                        y=['DGS30', 'DGS10', 'DGS5', 'DGS2', 'DGS3MO'],
+                        color_discrete_map={
+                            "DGS30": "#1f77b4",  # 深蓝
+                            "DGS10": "#00CC96",  # 青绿
+                            "DGS5":  "#AB63FA",  # 紫色
+                            "DGS2":  "#FFA15A",  # 橙色
+                            "DGS3MO":"#EF553B"   # 红色
+                        })
+    
+    fig_trend.update_layout(
+        title="",
+        height=400,
+        xaxis_title="",
+        yaxis_title="Yield (%)",
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center"),
+        paper_bgcolor='rgba(0,0,0,0)', 
+        plot_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
+
     # 百科
-        st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📚 C模块：因子专业定义与量化逻辑 (点击展开)", expanded=False):
         st.markdown("""
         <div class="glossary-box" style="border-left: 4px solid #6c5ce7; background-color: #f8f6ff;">
             <div class="glossary-title" style="color: #6c5ce7;">📊 核心量化模型逻辑 (Methodology)</div>
             <div class="glossary-content">
-                C模块关注资金的时间价值与经济预期。算法包含两种逻辑：<br>
+                C模块关注资金的时间价值与经济预期。算法包含三种逻辑：<br>
                 <b>1. 绝对水平 (Level)：</b> 采用 <b>Percentile Rank</b>。名义利率越高，融资成本越贵，得分越低。<br>
                 <b>2. 曲线形态 (Slope) - MID_BEST模型：</b> 曲线并非越陡越好。
-                <br>&nbsp;&nbsp;• <b>目标 (Target)</b>：利差 +50bps (0.5%) 视为最健康的“复苏/温和增长”形态。
-                <br>&nbsp;&nbsp;• <b>倒挂 (Inverted)</b>：利差 < 0，预示衰退，严重扣分。
-                <br>&nbsp;&nbsp;• <b>过陡 (Steep)</b>：利差 > 150bps，预示通胀失控或期限溢价过高，同样扣分。
+                <br>&nbsp;&nbsp; <b>目标 (Target)</b>：利差 +50bps (0.5%) 视为最健康的“复苏/温和增长”形态。
+                <br>&nbsp;&nbsp; <b>倒挂 (Inverted)</b>：利差 < 0，预示衰退，严重扣分。
+                <br>&nbsp;&nbsp; <b>过陡 (Steep)</b>：利差 > 150bps，预示通胀失控或期限溢价过高，同样扣分。<br>
+                <b>3. 动态惩罚 (Momentum Penalty) ：</b>
+                <br>&nbsp;&nbsp; <b>逻辑</b>：利率的变化速度往往比绝对位置更致命。若长端利率在短期（60天）内暴涨，即便绝对水平尚可，也会引发资产定价的“休克”（杀估值）。
+                <br>&nbsp;&nbsp; <b>机制</b>：监测 10Y/30Y 的 60天动量。若快速上行 (>30-50bps)，模型会自动触发 <b>0.2~0.8x 的折扣惩罚</b>，以反映市场的脆弱性。
             </div>
         </div>
 
@@ -968,26 +1050,30 @@ def render_module_d(df_raw):
     # --- 3. 页面展示 ---
     latest = df.iloc[-1]
     prev = df.iloc[-2]
+    prev_week = df.iloc[-8]
 
     # KPI
     c1, c2, c3, c4 = st.columns(4)
     score_color = "#09ab3b" if latest['Total_Score'] > 50 else "#ff2b2b"
     
     c1.markdown(f"""
-        <div class="metric-card"><div class="metric-label">D模块综合得分 (日频)</div>
-        <div class="metric-value" style="color: {score_color}">{latest['Total_Score']:.1f}</div></div>
+        <div class="metric-card">
+        <div class="metric-label">D模块综合得分 (日频)</div>
+        <div class="metric-value" style="color: {score_color}">{latest['Total_Score']:.1f}</div>
+        <div class="metric-label">vs上周: {latest['Total_Score'] - prev_week['Total_Score']:.1f}</div>
+        </div>
     """, unsafe_allow_html=True)
 
     # 实际利率
-    c2.metric("10Y 实际利率 (TIPS)", f"{latest['DFII10']:.2f}%", f"{(latest['DFII10']-prev['DFII10'])*100:.0f} bps", delta_color="inverse")
+    c2.metric("10Y 实际利率 (TIPS)", f"{latest['DFII10']:.2f}%", f"{(latest['DFII10']-prev_week['DFII10'])*100:.0f} bps(vs上周)", delta_color="inverse")
     
     # 通胀预期 (Breakeven)
     be_val = latest['T10YIE']
     # 离2.1%越远越危险
     be_color = "normal" if 1.8 < be_val < 2.5 else "off"
-    c3.metric("10Y 通胀预期 (Breakeven)", f"{be_val:.2f}%", f"{(be_val-prev['T10YIE'])*100:.0f} bps", delta_color=be_color)
+    c3.metric("10Y 通胀预期 (Breakeven)", f"{be_val:.2f}%", f"{(be_val-prev_week['T10YIE'])*100:.0f} bps(vs上周)", delta_color=be_color)
     
-    c4.metric("5Y 实际利率", f"{latest['DFII5']:.2f}%", f"{(latest['DFII5']-prev['DFII5'])*100:.0f} bps", delta_color="inverse")
+    c4.metric("5Y 实际利率", f"{latest['DFII5']:.2f}%", f"{(latest['DFII5']-prev_week['DFII5'])*100:.0f} bps(vs上周)", delta_color="inverse")
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("##### 🧩 因子细分得分")
@@ -1188,10 +1274,29 @@ def render_dashboard_standalone(df_all):
     df_c['Score_Curve_2s10s'] = get_slope_score(df_c['T10Y2Y'], 0.5, 1.5)
     df_c['Score_Curve_3m10s'] = get_slope_score(df_c['T10Y3M'], 0.75, 2.0)
     
-    df_c['Total_Score'] = (
+    df_c['Total_Score1'] = (
         df_c['Score_Curve_2s10s']*0.3 + df_c['Score_Curve_3m10s']*0.3 + 
         df_c['Score_10Y']*0.2 + df_c['Score_2Y']*0.1 + df_c['Score_30Y']*0.1
     )
+
+    # 10Y/30Y 双重动量惩罚
+    
+    slope_10 = df_c['DGS10'].diff(60)
+    slope_30 = df_c['DGS30'].diff(60)
+    
+    df_c['Max_Slope'] = pd.concat([slope_10, slope_30], axis=1).max(axis=1)
+    
+    def get_slope_penalty(s):
+        # s = 20天内利率上涨了多少bp
+        if s > 0.50: return 0.2
+        elif s > 0.30: return 0.6 
+        elif s > 0.15: return 0.8
+        else: return 1.0
+
+    df_c['Penalty_Factor'] = df_c['Max_Slope'].apply(get_slope_penalty)
+
+    # 最终分 = 基础分(Part 1) * 斜率惩罚系数
+    df_c['Total_Score'] = df_c['Total_Score1'] * df_c['Penalty_Factor']
 
 
     df_d = df_all.copy().dropna()
@@ -1204,6 +1309,8 @@ def render_dashboard_standalone(df_all):
         df_d['Score_Real_10Y']*0.4 + df_d['Score_Real_5Y']*0.3 + df_d['Score_Breakeven']*0.3
     )
 
+    
+
     # --------------------------------------------------------
     # 5. 渲染 Dashboard
     # --------------------------------------------------------
@@ -1214,9 +1321,9 @@ def render_dashboard_standalone(df_all):
     score_d = df_d['Total_Score'].iloc[-1]
     
     prev_a = df_a['Total_Score'].iloc[-2]
-    prev_b = df_b['Total_Score'].iloc[-2]
-    prev_c = df_c['Total_Score'].iloc[-2]
-    prev_d = df_d['Total_Score'].iloc[-2]
+    prev_b = df_b['Total_Score'].iloc[-8]
+    prev_c = df_c['Total_Score'].iloc[-8]
+    prev_d = df_d['Total_Score'].iloc[-8]
     
     total_score = score_a*0.3 + score_b*0.3 + score_c*0.2 + score_d*0.2
     total_prev = prev_a*0.3 + prev_b*0.3 + prev_c*0.2 + prev_d*0.2
@@ -1231,7 +1338,7 @@ def render_dashboard_standalone(df_all):
             <div class="metric-card" style="border-top: 6px solid {color}; padding: 30px;">
                 <div class="metric-label" style="font-size: 18px;">宏观综合得分</div>
                 <div class="metric-value" style="font-size: 48px; color: {color}">{total_score:.1f}</div>
-                <div class="metric-label">vs上期: {total_score - total_prev:+.1f}</div>
+                <div class="metric-label">vs上周: {total_score - total_prev:+.1f}</div>
             </div>
         """, unsafe_allow_html=True)
         
@@ -1239,7 +1346,7 @@ def render_dashboard_standalone(df_all):
         c1, c2, c3, c4 = st.columns(4)
         def kpi(col, label, val, prev_v):
             c = "#09ab3b" if val > 50 else "#ff2b2b"
-            col.metric(label, f"{val:.1f}", f"{val - prev_v:.1f}")
+            col.metric(label, f"{val:.1f}", f"{val - prev_v:.1f}(vs上周)")
             
         kpi(c1, "A.流动性 (30%)", score_a, prev_a)
         kpi(c2, "B.资金面 (30%)", score_b, prev_b)
@@ -1288,11 +1395,11 @@ def render_dashboard_standalone(df_all):
         fig_trend.add_trace(go.Scatter(x=recent, y=s_b.loc[recent], name='B.资金面', 
                                        line=dict(color='#a855f7', width=1.5, dash='dot')))
         
-        # 4. C (橙色虚线) - 新增
+        # 4. C (橙色虚线) 
         fig_trend.add_trace(go.Scatter(x=recent, y=s_c.loc[recent], name='C.国债', 
                                        line=dict(color='#d97706', width=1.5, dash='dot')))
         
-        # 5. D (红色虚线) - 新增
+        # 5. D (红色虚线) 
         fig_trend.add_trace(go.Scatter(x=recent, y=s_d.loc[recent], name='D.实际利率', 
                                        line=dict(color='#ff2b2b', width=1.5, dash='dot')))
         
@@ -1380,7 +1487,7 @@ def render_dashboard_standalone(df_all):
         
         st.plotly_chart(fig_cross, use_container_width=True)
         
-    # --- 🔥 新增：真理检验区 (Score vs SP500 vs BTC) ---
+    # --- ：真理检验区 (Score vs SP500 vs BTC) ---
     st.divider()
     st.markdown("##### 宏观分 vs 风险资产")
     
@@ -1435,6 +1542,62 @@ def render_dashboard_standalone(df_all):
             st.plotly_chart(fig_btc, use_container_width=True)
         else:
             st.info("数据加载中: 等待 BTC 数据...")
+    
+    st.divider()
+    
+    
+    st.markdown("##### 风险雷达")
+    
+    risk_factors = []
+    
+    if score_a < 40:
+        risk_factors.append(f"🔴 **A模块 (流动性)**: 得分过低 ({score_a:.1f})，显示 Fed 净流动性或 TGA 正在剧烈抽水。")
+    
+    if df_all['RPONTSYD'].iloc[-1] > 10:
+        risk_factors.append(f"🔴 **B模块 (资金面)**: 触发 **SRF 动态惩罚**。急救室用量 > 100亿，模型权重已强制倾斜至摩擦压力。")
+    elif df_all['SOFR'].iloc[-1] > df_all['IORB'].iloc[-1]:
+        risk_factors.append(f"🟠 **B模块 (资金面)**: SOFR 突破天花板 (IORB)，显示银行间资金紧张。")
+    
+    penalty_c = df_c['Penalty_Factor'].iloc[-1]
+    if penalty_c < 1.0:
+        discount = (1 - penalty_c) * 100
+        risk_factors.append(f"🔴 **C模块 (国债)**: 触发长端利率短期暴涨惩罚机制，基础得分已被打 **{discount:.0f}% 折**。")
+    elif df_all['T10Y2Y'].iloc[-1] < -0.5:
+         risk_factors.append(f"🟠 **C模块 (国债)**: 收益率曲线深度倒挂 (>50bps)，强烈的衰退预警。")
+
+    if df_all['DFII10'].iloc[-1] > 2.0:
+        risk_factors.append(f"🟠 **D模块 (实利)**: 10Y 实际利率 > 2.0%，处于极度限制性区域，对风险资产估值构成重压。")
+
+    # --- 渲染诊断结果 ---
+    if not risk_factors:
+        st.success("✅ **当前系统运行平稳**：四大模块未触发特殊惩罚机制，无明显的单一致命短板。")
+    else:
+        st.error(f"⚠️ **警报：模型识别到 {len(risk_factors)} 个关键风险源**")
+        for risk in risk_factors:
+            st.markdown(risk)
+
+    # 2. 模型使用说明书 (动态权重的逻辑)
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("📖 Dashboard 使用说明书"):
+        st.markdown("""
+        <div class="glossary-box" style="border-left: 4px solid #333;">
+            <div class="glossary-title">宏观量化逻辑：模块风险判断 & 动态惩罚</div>
+            <div class="glossary-content">
+                本模型并非简单的加权平均，而是旨在模拟宏观环境的脆弱性。核心逻辑在于识别各个模块因子风险。<br><br>
+                <b>1. 常态环境 (Normal Regime)：</b><br>
+                当市场平稳时，A/B/C/D 按照 30/30/20/20 的权重线性叠加，反映整体水位。<br><br>
+                <b>2. 动态惩罚 - 坏的时候权重增大：</b><br>
+                宏观环境危机往往由单一因子做为导火索从而引发更大规模的危机。为了捕捉这种非线性风险，模型内置了动态调控惩罚机制：
+                <br>
+                &nbsp;&nbsp;🛑 <b>B模块 (SRF)</b>：一旦监测到银行开始使用 SRF (急救贷款)，说明流动性传导失效。此时 B 模块内部权重重组，SRF 权重瞬间拉满，直接拉低总分。
+                <br>
+                &nbsp;&nbsp;🛑 <b>C模块 (利率急涨)</b>：市场不怕高利率，怕急涨。若 10Y/30Y 利率在 60天内快速上涨，C 模块总分会直接乘以惩罚系数 (例如 0.2-0.6x)，模拟“杀估值”效应。
+                <br><br>
+                <b>3. 如何使用本看板？</b><br>
+                不要只看总分。请重点关注上方的风险雷达。如果出现红色警报，说明宏观环境的某一根支柱出现了裂痕，此时即便其他模块得分很高，整体环境也是极其脆弱的。
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ==========================================
 # 5. 主程序入口
