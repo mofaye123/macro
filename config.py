@@ -4,7 +4,7 @@ import streamlit as st
 # ==========================================
 # 0. 核心配置API
 # ==========================================
-API_KEY = '7b5f4a9521fb6f976fa127a07393e8d4'
+API_KEY = st.secrets["FRED_API_KEY"]
 
 
 # FRED Series IDs
