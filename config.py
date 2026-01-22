@@ -17,7 +17,17 @@ SERIES_IDS = {
     'T10Y2Y': 'T10Y2Y', 'T10Y3M': 'T10Y3M',
     'DFII10': 'DFII10', 'DFII5': 'DFII5', 'T10YIE': 'T10YIE',
     'SP500': 'SP500',
-    'CBBTCUSD': 'CBBTCUSD', 
+    'CBBTCUSD': 'CBBTCUSD',
+    'DTWEXBGS': 'DTWEXBGS',
+    'DTWEXAFEGS': 'DTWEXAFEGS',
+    'DCOILWTICO': 'DCOILWTICO',   
+    'DHHNGSP': 'DHHNGSP',         
+    'DEXJPUS': 'DEXJPUS',         
+    'IRSTCI01JPM156N': 'IRSTCI01JPM156N', 
+    'VIXCLS': 'VIXCLS',             
+    'VXVCLS': 'VXVCLS',             
+    'BAMLH0A0HYM2': 'BAMLH0A0HYM2', 
+    
 }
 
 # CSS 样式
@@ -90,3 +100,4 @@ CSS_STYLE = """
     [data-testid="stMetricValue"] { font-size: 24px; color: #333 !important; }
 </style>
 """
+
