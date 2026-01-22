@@ -137,7 +137,35 @@ def render_dashboard_standalone(df_all):
         df_d['Score_Real_10Y']*0.4 + df_d['Score_Real_5Y']*0.3 + df_d['Score_Breakeven']*0.3
     )
 
+    df_e = df_all.copy()
+    if 'IRSTCI01JPM156N' in df_e.columns:
+        df_e['IRSTCI01JPM156N'] = df_e['IRSTCI01JPM156N'].fillna(method='ffill')
+    df_e = df_e.fillna(method='ffill').dropna()
+
+    df_e['Chg_USD'] = df_e['DTWEXBGS'].pct_change(63)
+    # 修复点：
+    df_e['Score_USD'] = (1 - df_e['Chg_USD'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     
+    df_e['Yen_Appreciation'] = -1 * df_e['DEXJPUS'].pct_change(63)
+    # 修复点：
+    df_e['Score_Yen_FX'] = (1 - df_e['Yen_Appreciation'].rolling(1260, min_periods=1).rank(pct=True)) * 100
+    # 修复点：
+    df_e['Score_BoJ_Rate'] = (1 - df_e['IRSTCI01JPM156N'].rolling(1260, min_periods=1).rank(pct=True)) * 100
+    df_e['Score_Yen_Total'] = df_e['Score_Yen_FX'] * 0.7 + df_e['Score_BoJ_Rate'] * 0.3
+
+    df_e['Chg_Oil'] = df_e['DCOILWTICO'].pct_change(63)
+    # 修复点：
+    df_e['Score_Oil'] = (1 - df_e['Chg_Oil'].rolling(1260, min_periods=1).rank(pct=True)) * 100
+    df_e['Chg_Gas'] = df_e['DHHNGSP'].pct_change(63)
+    # 修复点：
+    df_e['Score_Gas'] = (1 - df_e['Chg_Gas'].rolling(1260, min_periods=1).rank(pct=True)) * 100
+    df_e['Score_Energy'] = df_e['Score_Oil'] * 0.5 + df_e['Score_Gas'] * 0.5
+
+    df_e['Total_Score'] = (
+        df_e['Score_USD'] * 0.25 + 
+        df_e['Score_Yen_Total'] * 0.35 +
+        df_e['Score_Energy'] * 0.40
+    )
 
     # --------------------------------------------------------
     # 5. 渲染 Dashboard
@@ -147,14 +175,16 @@ def render_dashboard_standalone(df_all):
     score_b = df_b['Total_Score'].iloc[-1]
     score_c = df_c['Total_Score'].iloc[-1]
     score_d = df_d['Total_Score'].iloc[-1]
+    score_e = df_e['Total_Score'].iloc[-1]
     
     prev_a = df_a['Total_Score'].iloc[-2]
     prev_b = df_b['Total_Score'].iloc[-8]
     prev_c = df_c['Total_Score'].iloc[-8]
     prev_d = df_d['Total_Score'].iloc[-8]
+    prev_e = df_d['Total_Score'].iloc[-8]
     
-    total_score = score_a*0.3 + score_b*0.3 + score_c*0.2 + score_d*0.2
-    total_prev = prev_a*0.3 + prev_b*0.3 + prev_c*0.2 + prev_d*0.2
+    total_score = score_a*0.25 + score_b*0.25 + score_c*0.15 + score_d*0.15+score_e*0.20
+    total_prev = prev_a*0.25 + prev_b*0.25 + prev_c*0.15 + prev_d*0.15+ prev_e*0.20
     
     # UI 部分
     st.markdown("###  宏观环境 (Macro Dashboard)")
@@ -171,15 +201,16 @@ def render_dashboard_standalone(df_all):
         """, unsafe_allow_html=True)
         
     with col_sub:
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         def kpi(col, label, val, prev_v):
             c = "#09ab3b" if val > 50 else "#ff2b2b"
             col.metric(label, f"{val:.1f}", f"{val - prev_v:.1f}(vs上周)")
             
-        kpi(c1, "A.流动性 (30%)", score_a, prev_a)
-        kpi(c2, "B.资金面 (30%)", score_b, prev_b)
-        kpi(c3, "C.国债结构 (20%)", score_c, prev_c)
-        kpi(c4, "D.实际利率 (20%)", score_d, prev_d)
+        kpi(c1, "A.流动性 (25%)", score_a, prev_a)
+        kpi(c2, "B.资金面 (25%)", score_b, prev_b)
+        kpi(c3, "C.国债结构 (15%)", score_c, prev_c)
+        kpi(c4, "D.实际利率 (15%)", score_d, prev_d)
+        kpi(c5, "E.外部冲击 (20%)", score_e, prev_e)
         
         st.markdown("<br>", unsafe_allow_html=True)
         k1, k2, k3, k4 = st.columns(4)
@@ -205,9 +236,10 @@ def render_dashboard_standalone(df_all):
         s_b = df_b['Total_Score']
         s_c = df_c['Total_Score']
         s_d = df_d['Total_Score']
+        s_e = df_e['Total_Score']
         
         # 计算日频的历史总分
-        s_total = s_a*0.3 + s_b*0.3 + s_c*0.2 + s_d*0.2
+        s_total = s_a*0.25 + s_b*0.25 + s_c*0.15 + s_d*0.15 + s_e*0.2
         recent = idx[idx >= (datetime.now() - timedelta(days=360))]
         
         # --- 这里是更新后的5条线 ---
@@ -231,8 +263,13 @@ def render_dashboard_standalone(df_all):
         fig_trend.add_trace(go.Scatter(x=recent, y=s_d.loc[recent], name='D.实际利率', 
                                        line=dict(color='#ff2b2b', width=1.5, dash='dot')))
         
+        # 6. E (蓝色虚线）
+        fig_trend.add_trace(go.Scatter(x=recent, y=s_e.loc[recent], name='E.外部冲击', 
+                                     line=dict(color='#0068c9', width=1.5, dash='dot')))
+
         fig_trend.update_layout(height=350, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=1.1), hovermode="x unified")
         st.plotly_chart(fig_trend, use_container_width=True)
+
 
     with c_right:
         # 1. 获取最新数据状态
@@ -396,9 +433,22 @@ def render_dashboard_standalone(df_all):
     if df_all['DFII10'].iloc[-1] > 2.0:
         risk_factors.append(f"🟠 **D模块 (实利)**: 10Y 实际利率 > 2.0%，处于极度限制性区域，对风险资产估值构成重压。")
 
+    try:
+        jpy_chg_5d = df_all['DEXJPUS'].pct_change(5).iloc[-1]
+        if jpy_chg_5d < -0.03: 
+            risk_factors.append(f"🔴 **E模块 (汇率)**: 检测到 **日元套息平仓风险**。USD/JPY 5日内暴跌 (>3%)，警惕全球流动性冲击。")
+    except:
+        pass
+
+    try:
+        oil_chg_20d = df_all['DCOILWTICO'].pct_change(20).iloc[-1]
+        if oil_chg_20d > 0.15: 
+            risk_factors.append(f"🟠 **E模块 (能源)**: 油价短期飙升 (>15%)，通胀卷土重来风险增加。")
+    except:
+        pass
     # --- 渲染诊断结果 ---
     if not risk_factors:
-        st.success("✅ **当前系统运行平稳**：四大模块未触发特殊惩罚机制，无明显的单一致命短板。")
+        st.success("✅ **当前系统运行平稳**：五大模块未触发特殊惩罚机制，无明显的单一致命短板。")
     else:
         st.error(f"⚠️ **警报：模型识别到 {len(risk_factors)} 个关键风险源**")
         for risk in risk_factors:
