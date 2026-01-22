@@ -13,6 +13,7 @@ from modules.module_a import render_module_a
 from modules.module_b import render_module_b
 from modules.module_c import render_module_c
 from modules.module_d import render_module_d
+from modules.module_e import render_module_e
 
 # ==========================================
 # 页面初始化
@@ -38,12 +39,13 @@ if not df_all.empty:
     st.markdown("---")
 
     # 定义 Tabs
-    tab_dash, tab1, tab2, tab3, tab4 = st.tabs([
+    tab_dash, tab1, tab2, tab3, tab4, tab5 = st.tabs([
         " DASHBOARD", 
         "A. 系统流动性", 
         "B. 资金价格与摩擦",
         "C. 国债期限结构",
-        "D. 实际利率与通胀"
+        "D. 实际利率与通胀",
+        "E. 外部冲击与汇率"
     ])
     
     with tab_dash:
@@ -56,5 +58,7 @@ if not df_all.empty:
         render_module_c(df_all)
     with tab4:
         render_module_d(df_all)
+    with tab5:
+        render_module_e(df_all)
 else:
     st.error("数据加载失败，请检查网络或 API Key。")
