@@ -143,29 +143,30 @@ def render_dashboard_standalone(df_all):
     df_e = df_e.fillna(method='ffill').dropna()
 
     df_e['Chg_USD'] = df_e['DTWEXBGS'].pct_change(63)
-    # 修复点：
     df_e['Score_USD'] = (1 - df_e['Chg_USD'].rolling(1260, min_periods=1).rank(pct=True)) * 100
+
+    df_e['Chg_DXY'] = df_e['DTWEXAFEGS'].pct_change(63)
+    df_e['Score_DXY'] = (1 - df_e['Chg_DXY'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     
     df_e['Yen_Appreciation'] = -1 * df_e['DEXJPUS'].pct_change(63)
-    # 修复点：
     df_e['Score_Yen_FX'] = (1 - df_e['Yen_Appreciation'].rolling(1260, min_periods=1).rank(pct=True)) * 100
-    # 修复点：
+   
     df_e['Score_BoJ_Rate'] = (1 - df_e['IRSTCI01JPM156N'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     df_e['Score_Yen_Total'] = df_e['Score_Yen_FX'] * 0.7 + df_e['Score_BoJ_Rate'] * 0.3
 
     df_e['Chg_Oil'] = df_e['DCOILWTICO'].pct_change(63)
-    # 修复点：
     df_e['Score_Oil'] = (1 - df_e['Chg_Oil'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     df_e['Chg_Gas'] = df_e['DHHNGSP'].pct_change(63)
-    # 修复点：
     df_e['Score_Gas'] = (1 - df_e['Chg_Gas'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     df_e['Score_Energy'] = df_e['Score_Oil'] * 0.5 + df_e['Score_Gas'] * 0.5
 
     df_e['Total_Score'] = (
-        df_e['Score_USD'] * 0.25 + 
-        df_e['Score_Yen_Total'] * 0.35 +
-        df_e['Score_Energy'] * 0.40
+        df_e['Score_USD'] * 0.20 +
+        df_e['Score_DXY'] * 0.20 +
+        df_e['Score_Yen_Total'] * 0.3 +
+        df_e['Score_Energy'] * 0.3
     )
+
 
     # --------------------------------------------------------
     # 5. 渲染 Dashboard
@@ -463,7 +464,7 @@ def render_dashboard_standalone(df_all):
             <div class="glossary-content">
                 本模型并非简单的加权平均，而是旨在模拟宏观环境的脆弱性。核心逻辑在于识别各个模块因子风险。<br><br>
                 <b>1. 常态环境 (Normal Regime)：</b><br>
-                当市场平稳时，A/B/C/D 按照 30/30/20/20 的权重线性叠加，反映整体水位。<br><br>
+                当市场平稳时，A/B/C/D/E 按照 25/25/15/15/20 的权重线性叠加，反映整体水位。<br><br>
                 <b>2. 动态惩罚 - 坏的时候权重增大：</b><br>
                 宏观环境危机往往由单一因子做为导火索从而引发更大规模的危机。为了捕捉这种非线性风险，模型内置了动态调控惩罚机制：
                 <br>
