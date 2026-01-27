@@ -47,7 +47,7 @@ def render_module_b(df_raw):
     
     # 2.1 摩擦因子1: SOFR-IORB (天花板穿透监控)
     df['F1_Spread'] = df['SOFR'] - df['IORB']
-    df['F1_Baseline'] = df['F1_Spread'].rolling(126, min_periods=1).median()
+    df['F1_Baseline'] = df['F1_Spread'].rolling(60, min_periods=1).median()
     df['F1_Dev'] = df['F1_Spread'] - df['F1_Baseline']
     
     #  只惩罚正向穿透
@@ -56,13 +56,13 @@ def render_module_b(df_raw):
     
     # 2.2 摩擦因子2: SOFR-RRP (地板距离监控)
     df['F2_Spread'] = df['SOFR'] - df['RRPONTSYAWARD']
-    df['F2_Baseline'] = df['F2_Spread'].rolling(126, min_periods=1).median()
+    df['F2_Baseline'] = df['F2_Spread'].rolling(60, min_periods=1).median()
     df['F2_Dev'] = (df['F2_Spread'] - df['F2_Baseline']).abs()  # 双向监控
     df['Score_F2'] = df['F2_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
     
     # 2.3 摩擦因子3: TGCR-SOFR (回购市场分裂)
     df['F3_Spread'] = df['TGCRRATE'] - df['SOFR']
-    df['F3_Baseline'] = df['F3_Spread'].rolling(126, min_periods=1).median()
+    df['F3_Baseline'] = df['F3_Spread'].rolling(60, min_periods=1).median()
     df['F3_Dev'] = (df['F3_Spread'] - df['F3_Baseline']).abs()
     df['Score_F3'] = df['F3_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
     
@@ -287,7 +287,7 @@ def render_module_b(df_raw):
                 <b>1. 政策制度 (Policy Regime)：</b> 
                 <br>&nbsp;&nbsp; 结合利率绝对水平（低利率加分）与 13周变化趋势（降息趋势加分）。<br>
                 <b>2. 摩擦压力 (Market Friction)：</b> 
-                <br>&nbsp;&nbsp; <b>基准偏离度 (Z-Score思路)</b>：计算三组走廊摩擦相对其 126天移动中枢的偏离程度。
+                <br>&nbsp;&nbsp; <b>基准偏离度 (Z-Score思路)</b>：计算三组走廊摩擦相对其 60天移动中枢的偏离程度。
                 <br>&nbsp;&nbsp; <b>非对称惩罚</b>：仅当 SOFR 突破天花板 (IORB) 时给予重罚，正常波动不扣分。
                 <br>&nbsp;&nbsp; <b>动态权重 </b>：一旦监测到 SRF 用量激增，模型自动进入“非正常模式”，将 SRF 在摩擦压力权重从 0% 提至 60%，迅速拉低总分以发出警报。
             </div>
