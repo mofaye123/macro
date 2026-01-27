@@ -493,7 +493,7 @@ def render_dashboard_standalone(df_all):
             st.markdown(risk)
 
     # 2. 模型使用说明书 (动态权重的逻辑)
-    st.markdown("<br>", unsafe_allow_html=True)
+     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📖 Dashboard 使用说明书"):
         st.markdown("""
         <div class="glossary-box" style="border-left: 4px solid #333;">
@@ -505,12 +505,17 @@ def render_dashboard_standalone(df_all):
                 <b>2. 动态惩罚 - 坏的时候权重增大：</b><br>
                 宏观环境危机往往由单一因子做为导火索从而引发更大规模的危机。为了捕捉这种非线性风险，模型内置了动态调控惩罚机制：
                 <br>
+                &nbsp;&nbsp;🛑 <b>A模块 (TGA 抽水)</b>：监测财政部账户存量。当 TGA > 800B 时触发阶梯惩罚系数 (0.8x / 0.6x / 0.5x)，即使趋势向好，高绝对水位也会强行压制得分。
+                <br>
                 &nbsp;&nbsp;🛑 <b>B模块 (SRF)</b>：一旦监测到银行开始使用 SRF (急救贷款)，说明流动性传导失效。此时 B 模块内部权重重组，SRF 权重瞬间拉满，直接拉低B模块总分。
                 <br>
                 &nbsp;&nbsp;🛑 <b>C模块 (利率急涨)</b>：市场不怕高利率，怕急涨。若 10Y/30Y 利率在 60天内快速上涨，C 模块总分会直接乘以惩罚系数 (例如 0.2-0.8x)，模拟“杀估值”效应。
                 <br><br>
-                <b>3. 如何使用本看板？</b><br>
+                <b>3. 如何解读“流入/流出”动态标题？</b><br>
+                标题基于<b>积分权重制</b>判定。当 TGA 周度放水、SRF 闲置及资金成本稳定等因子贡献积分 ≥ 1 时，判定为 🟢 NET INFLOW。反之，若积分 ≤ -1 (如 TGA 高位且抽水)，则判定为 🔴 NET OUTFLOW。
+                <br><br>
+                <b>4. 如何使用本看板？</b><br>
                 不要只看总分。请重点关注上方的风险雷达。如果出现红色警报，说明宏观环境的某一根支柱出现了裂痕，此时即便其他模块得分很高，整体环境也是极其脆弱的。
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True）
