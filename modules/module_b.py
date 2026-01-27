@@ -287,7 +287,7 @@ def render_module_b(df_raw):
                 <b>1. 政策制度 (Policy Regime)：</b> 
                 <br>&nbsp;&nbsp; 结合利率绝对水平（低利率加分）与 13周变化趋势（降息趋势加分）。<br>
                 <b>2. 摩擦压力 (Market Friction)：</b> 
-                <br>&nbsp;&nbsp; <b>基准偏离度 (Z-Score思路)</b>：计算 SOFR/TGCR 相对其 126天移动中枢的偏离程度。
+                <br>&nbsp;&nbsp; <b>基准偏离度 (Z-Score思路)</b>：计算三组走廊摩擦相对其 126天移动中枢的偏离程度。
                 <br>&nbsp;&nbsp; <b>非对称惩罚</b>：仅当 SOFR 突破天花板 (IORB) 时给予重罚，正常波动不扣分。
                 <br>&nbsp;&nbsp; <b>动态权重 </b>：一旦监测到 SRF 用量激增，模型自动进入“非正常模式”，将 SRF 在摩擦压力权重从 0% 提至 60%，迅速拉低总分以发出警报。
             </div>
