@@ -286,34 +286,42 @@ def render_dashboard_standalone(df_all):
 
 
     with c_right:
+        # 1. 获取最新数据
         latest_tga = df_all['WTREGEN'].iloc[-1]
         prev_tga_week = df_all['WTREGEN'].iloc[-8]
         latest_srf = df_all['RPONTSYD'].iloc[-1]
         latest_sofr = df_all['SOFR'].iloc[-1]
         prev_sofr_month = df_all['SOFR'].iloc[-30]
         
+        # 2. 积分计算逻辑
         score = 0
         
+        # --- 因子 A: TGA (变动趋势 + 绝对水位双控) ---
         tga_diff = (latest_tga - prev_tga_week) / 1000
         
+        # 首先计算趋势分
         if tga_diff < -10: score += 1   # 周度放水
         elif tga_diff > 10: score -= 1  # 周度抽水
         
+        # 【关键修正】：绝对水位强行扣分（压制趋势）
+        # 即使你在放水，但只要总量在高位，就要把上面的加分扣掉甚至倒扣
         if latest_tga >= 900:
-            score -= 3  
+            score -= 3  # 极端枯竭：直接封死红色区间
         elif latest_tga >= 850:
-            score -= 2  
+            score -= 2  # 二级高压
         elif latest_tga >= 800:
-            score -= 1 
+            score -= 1  # 一级警戒
             
+        # --- 因子 B: SRF (绝对水平) ---
         if latest_srf < 5: score += 1
         elif latest_srf > 50: score -= 2
         
+        # --- 因子 C: SOFR (月度趋势) ---
         sofr_diff = latest_sofr - prev_sofr_month
         if sofr_diff < -0.05: score += 1
         elif sofr_diff > 0.10: score -= 1
         
-        # 3. 
+        # 3. 最终判定映射
         if score >= 1:
             status_text = f"🟢 流动性状态：NET INFLOW (净流入) [积分:{score}]"
             status_color = "#09ab3b"
@@ -493,7 +501,7 @@ def render_dashboard_standalone(df_all):
             st.markdown(risk)
 
     # 2. 模型使用说明书 (动态权重的逻辑)
-     st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📖 Dashboard 使用说明书"):
         st.markdown("""
         <div class="glossary-box" style="border-left: 4px solid #333;">
@@ -518,4 +526,4 @@ def render_dashboard_standalone(df_all):
                 不要只看总分。请重点关注上方的风险雷达。如果出现红色警报，说明宏观环境的某一根支柱出现了裂痕，此时即便其他模块得分很高，整体环境也是极其脆弱的。
             </div>
         </div>
-        """, unsafe_allow_html=True）
+        """, unsafe_allow_html=True)
