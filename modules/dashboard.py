@@ -288,29 +288,38 @@ def render_dashboard_standalone(df_all):
     with c_right:
         # 1. 获取最新数据状态
         latest_tga = df_all['WTREGEN'].iloc[-1]
-        prev_tga = df_all['WTREGEN'].iloc[-8] # 一周前
+        prev_tga_week = df_all['WTREGEN'].iloc[-8]  
+        
         latest_srf = df_all['RPONTSYD'].iloc[-1]
         latest_sofr = df_all['SOFR'].iloc[-1]
-        prev_sofr = df_all['SOFR'].iloc[-30] # 一个月前
+        prev_sofr_month = df_all['SOFR'].iloc[-30] 
         
-        # 2. 智能逻辑判断
-        # TGA 变动 (下降为好)
-        tga_down = (latest_tga - prev_tga) < 0 
-        # SRF 状态 (低位 < 50亿 算忽略不计)
-        srf_low = latest_srf < 5
-        # SOFR 状态 (月度变化 < 5bp 算稳定)
-        sofr_stable = abs(latest_sofr - prev_sofr) < 0.05
+        # 2. 积分逻辑 
+        score = 0
         
-        # 3. 生成结论
-        if tga_down and srf_low and sofr_stable:
-            status_text = "🟢 流动性状态：NET INFLOW (净流入)"
+        # 增加容忍度：增加小于 100 亿视为中性，不直接扣死
+        tga_diff = (latest_tga - prev_tga_week) / 1000
+        if tga_diff < -10: score += 1   # 净放水 > 100亿
+        elif tga_diff > 10: score -= 1  # 净抽水 > 100亿
+        
+        # 因子 B: SRF (绝对水平)
+        if latest_srf < 5: score += 1   # 急救室闲置
+        elif latest_srf > 50: score -= 2 # 急救室压力巨大 (双倍扣分)
+        
+        # 因子 C: SOFR (月度趋势)
+        sofr_diff = latest_sofr - prev_sofr_month
+        if sofr_diff < -0.05: score += 1 # 资金显著转松
+        elif sofr_diff > 0.10: score -= 1 # 资金显著收紧
+        
+        # 3. 最终判定映射
+        if score >= 1:
+            status_text = f"🟢 流动性状态：NET INFLOW (净流入) [积分:{score}]"
             status_color = "#09ab3b"
-        elif (not tga_down) or (not srf_low) or (latest_sofr - prev_sofr > 0.05):
-            # 只要有一个坏因子冒头，就倾向于流出/压力
-            status_text = "🔴 流动性状态：NET OUTFLOW (净流出/压力)"
+        elif score <= -1:
+            status_text = f"🔴 流动性状态：NET OUTFLOW (压力/流出) [积分:{score}]"
             status_color = "#ff2b2b"
         else:
-            status_text = "⚪ 流动性状态：NEUTRAL (震荡)"
+            status_text = "⚪ 流动性状态：NEUTRAL (区间震荡)"
             status_color = "#d97706"
 
         # 4. 渲染标题和图表
