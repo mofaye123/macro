@@ -12,10 +12,26 @@ def render_module_a(df_all):
 
     df = pd.DataFrame()
     df['WALCL'] = df_raw['WALCL'].resample('W-WED').last() 
-    df['WTREGEN'] = df_raw['WTREGEN'].resample('W-WED').mean()
-    df['RRPONTSYD'] = df_raw['RRPONTSYD'].resample('W-WED').mean()
-    df['WRESBAL'] = df_raw['WRESBAL'].resample('W-WED').mean()
+    df['WTREGEN'] = df_raw['WTREGEN'].resample('W-WED').last()
+    df['RRPONTSYD'] = df_raw['RRPONTSYD'].resample('W-WED').last()
+    df['WRESBAL'] = df_raw['WRESBAL'].resample('W-WED').last()
     df = df.fillna(method='ffill').dropna()
+
+    def get_tga_penalty(tga_val):
+        tga_b = tga_val / 1000 if tga_val > 10000 else tga_val
+        
+        if tga_b < 800:
+            return 1.0  
+        elif 800 <= tga_b < 850:
+            return 0.8  
+        elif 850 <= tga_b < 900:
+            return 0.6
+        else:
+            return 0.5
+    
+    df['TGA_Penalty'] = df['WTREGEN'].apply(get_tga_penalty)
+    
+    # 应用：趋势分 * 平滑惩罚系数
 
     if df['RRPONTSYD'].mean() < 10000:
         df['RRP_Clean'] = df['RRPONTSYD'] * 1000
@@ -29,7 +45,7 @@ def render_module_a(df_all):
     
     df['Score_Reserves'] = get_score(df['WRESBAL'])
     df['Score_NetLiq'] = get_score(df['Net_Liquidity'])
-    df['Score_TGA'] = get_score(-df['WTREGEN'])
+    df['Score_TGA'] = get_score(-df['WTREGEN']) * df['TGA_Penalty']
     df['Score_RRP'] = get_score(-df['RRP_Clean']) 
     
     df['Total_Score'] = (
@@ -85,17 +101,57 @@ def render_module_a(df_all):
 
     
     # TGA 曲线
-    # 原始数据 WTREGEN 单位是 Million，除以 1000 变 Billion
-    fig_tga = go.Figure()
-    fig_tga.add_trace(go.Scatter(x=df.index, y=df['WTREGEN']/1000, name='TGA 余额 ($B)', 
-                                 line=dict(color='#d97706', width=2), fill='tozeroy', fillcolor='rgba(217, 119, 6, 0.1)'))
+# 1. 计算当前 TGA 余额（Billion）及 匹配惩罚系数
+    tga_latest_val = df['WTREGEN'].iloc[-1]
+    tga_b = tga_latest_val / 1000 if tga_latest_val > 10000 else tga_latest_val
     
-    # 阈值线 (4000亿 和 8000亿)
-    fig_tga.add_hline(y=400, line_dash="dash", line_color="#09ab3b", annotation_text="利好区 (<400B)", annotation_position="bottom right")
-    fig_tga.add_hline(y=800, line_dash="dash", line_color="#ff2b2b", annotation_text="警戒区 (>800B)", annotation_position="top right")
+    # 匹配显示逻辑
+    if tga_b < 800:
+        p_text, p_color = "1.0x (无惩罚)", "#09ab3b"
+    elif 800 <= tga_b < 850:
+        p_text, p_color = "0.8x (一级惩罚)", "#f59e0b"
+    elif 850 <= tga_b < 900:
+        p_text, p_color = "0.6x (二级惩罚)", "#ea580c"
+    else:
+        p_text, p_color = "0.5x (极端惩罚)", "#ff2b2b"
 
-    fig_tga.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='black'),
-                          title="TGA 余额趋势 ($B)", hovermode="x unified", yaxis_title="Billions ($)")
+    # 2. 绘图逻辑
+    fig_tga = go.Figure()
+    # 绘制主曲线
+    fig_tga.add_trace(go.Scatter(
+        x=df.index, y=df['WTREGEN']/1000, name='TGA 余额 ($B)', 
+        line=dict(color='#d97706', width=2), 
+        fill='tozeroy', fillcolor='rgba(217, 119, 6, 0.1)'
+    ))
+    
+    # 3. 绘制阶梯阈值线 (严格对齐你的惩罚逻辑)
+    # 利好线
+    fig_tga.add_hline(y=400, line_dash="dash", line_color="#09ab3b", 
+                      annotation_text="利好区 (<400B)", annotation_position="bottom right")
+    
+    # 800B 警戒线 (0.8x)
+    fig_tga.add_hline(y=800, line_dash="dash", line_color="#f59e0b", 
+                      annotation_text="警戒区 (800B+ : 0.8x)", annotation_position="top right")
+    
+    # 850B 高压线 (0.6x)
+    fig_tga.add_hline(y=850, line_dash="dot", line_color="#ea580c", 
+                      annotation_text="高压区 (850B+ : 0.6x)", annotation_position="top right")
+    
+    # 900B 枯竭线 (0.5x)
+    fig_tga.add_hline(y=900, line_dash="solid", line_color="#ff2b2b", 
+                      annotation_text="枯竭区 (900B+ : 0.5x)", annotation_position="top right")
+
+    # 4. 更新布局：在标题动态显示当前系数
+    fig_tga.update_layout(
+        height=400, 
+        paper_bgcolor='rgba(0,0,0,0)', 
+        plot_bgcolor='rgba(0,0,0,0)', 
+        font=dict(color='black'),
+        title=f"TGA 余额趋势: 当前 {tga_b:.1f}B | <span style='color:{p_color};'>惩罚系数: {p_text}</span>", 
+        hovermode="x unified", 
+        yaxis_title="Billions ($)"
+    )
+    
     st.plotly_chart(fig_tga, use_container_width=True)
 
     # 百科
