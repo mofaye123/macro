@@ -12,10 +12,24 @@ def render_dashboard_standalone(df_all):
     
     df_a = pd.DataFrame()
     df_a['WALCL'] = df_raw_a['WALCL'].resample('W-WED').last() 
-    df_a['WTREGEN'] = df_raw_a['WTREGEN'].resample('W-WED').mean()
-    df_a['RRPONTSYD'] = df_raw_a['RRPONTSYD'].resample('W-WED').mean()
-    df_a['WRESBAL'] = df_raw_a['WRESBAL'].resample('W-WED').mean()
+    df_a['WTREGEN'] = df_raw_a['WTREGEN'].resample('W-WED').last()
+    df_a['RRPONTSYD'] = df_raw_a['RRPONTSYD'].resample('W-WED').last()
+    df_a['WRESBAL'] = df_raw_a['WRESBAL'].resample('W-WED').last()
     df_a = df_a.fillna(method='ffill').dropna()
+
+    def get_tga_penalty(tga_val):
+        tga_b = tga_val / 1000 if tga_val > 10000 else tga_val
+        
+        if tga_b < 800:
+            return 1.0  
+        elif 800 <= tga_b < 850:
+            return 0.8  
+        elif 850 <= tga_b < 900:
+            return 0.6
+        else:
+            return 0.5
+    
+    df_a['TGA_Penalty'] = df_a['WTREGEN'].apply(get_tga_penalty)
 
     if df_a['RRPONTSYD'].mean() < 10000:
         df_a['RRP_Clean'] = df_a['RRPONTSYD'] * 1000
@@ -28,7 +42,7 @@ def render_dashboard_standalone(df_all):
         return series.diff(13).rank(pct=True) * 100
     
     df_a['Score_NetLiq'] = get_score_a(df_a['Net_Liquidity'])
-    df_a['Score_TGA'] = get_score_a(-df_a['WTREGEN'])
+    df_a['Score_TGA'] = get_score_a(-df_a['WTREGEN']) * df_a['TGA_Penalty']
     df_a['Score_RRP'] = get_score_a(-df_a['RRP_Clean'])
     df_a['Score_Reserves'] = get_score_a(df_a['WRESBAL'])
     
@@ -167,7 +181,6 @@ def render_dashboard_standalone(df_all):
         df_e['Score_Energy'] * 0.3
     )
 
-
     # --------------------------------------------------------
     # 5. 渲染 Dashboard
     # --------------------------------------------------------
@@ -215,7 +228,7 @@ def render_dashboard_standalone(df_all):
         
         st.markdown("<br>", unsafe_allow_html=True)
         k1, k2, k3, k4 = st.columns(4)
-        if (df_all['WTREGEN'].iloc[-1] - df_all['WTREGEN'].iloc[-5]) > 0: k1.error("TGA抽水（周）") 
+        if (df_all['WTREGEN'].iloc[-1] - df_all['WTREGEN'].iloc[-8]) > 0: k1.error("TGA抽水（周）") 
         else: k1.success("TGA放水（周）")
         if df_all['T10Y2Y'].iloc[-1] < 0: k2.error("10Y-2Y倒挂") 
         else: k2.success("10Y-2Y正常")
@@ -241,7 +254,7 @@ def render_dashboard_standalone(df_all):
         
         # 计算日频的历史总分
         s_total = s_a*0.25 + s_b*0.25 + s_c*0.15 + s_d*0.15 + s_e*0.2
-        recent = idx[idx >= (datetime.now() - timedelta(days=360))]
+        recent = idx[idx >= (datetime.now() - timedelta(days=1825))]
         
         # --- 这里是更新后的5条线 ---
         # 1. 总分 (粗黑)
@@ -268,17 +281,17 @@ def render_dashboard_standalone(df_all):
         fig_trend.add_trace(go.Scatter(x=recent, y=s_e.loc[recent], name='E.外部冲击', 
                                      line=dict(color='#0068c9', width=1.5, dash='dot')))
 
-        fig_trend.update_layout(height=350, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=1.1), hovermode="x unified")
+        fig_trend.update_layout(height=380, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=1.1), hovermode="x unified")
         st.plotly_chart(fig_trend, use_container_width=True)
 
 
     with c_right:
         # 1. 获取最新数据状态
         latest_tga = df_all['WTREGEN'].iloc[-1]
-        prev_tga = df_all['WTREGEN'].iloc[-5] # 一周前
+        prev_tga = df_all['WTREGEN'].iloc[-8] # 一周前
         latest_srf = df_all['RPONTSYD'].iloc[-1]
         latest_sofr = df_all['SOFR'].iloc[-1]
-        prev_sofr = df_all['SOFR'].iloc[-20] # 一个月前
+        prev_sofr = df_all['SOFR'].iloc[-30] # 一个月前
         
         # 2. 智能逻辑判断
         # TGA 变动 (下降为好)
@@ -331,7 +344,7 @@ def render_dashboard_standalone(df_all):
         ))
         
         fig_cross.update_layout(
-            title="(流入：TGA下降，SRF低位，SOFR稳定/ 流出：TGA上升，SRF高企，SOFR攀升)", height=350, 
+            title="(流入：TGA下降，SRF低位，SOFR稳定/ 流出：TGA上升，SRF高企，SOFR攀升)", height=400, 
             yaxis=dict(title="TGA ($B)", showgrid=False),
             yaxis2=dict(title="Rate / SRF", overlaying='y', side='right', showgrid=True),
             legend=dict(orientation="h", y=-0.2, x=0.5, xanchor="center"), 
@@ -415,6 +428,19 @@ def render_dashboard_standalone(df_all):
     st.markdown("##### 风险雷达")
     
     risk_factors = []
+
+    tga_latest = df_all['WTREGEN'].iloc[-1]
+    tga_b = tga_latest / 1000 if tga_latest > 10000 else tga_latest
+    
+    if tga_b >= 800:
+        if tga_b >= 900:
+            p_val, p_level = "0.5x", "🔴 "
+        elif tga_b >= 850:
+            p_val, p_level = "0.6x", "🟠 "
+        else:
+            p_val, p_level = "0.8x", "🟡 "
+        
+        risk_factors.append(f"{p_level} **A模块 (TGA惩罚)**: TGA 余额高达 {tga_b:.1f}B，已触发阶梯惩罚系数 **{p_val}**，流动性正在被财政部剧烈抽水。")
     
     if score_a < 40:
         risk_factors.append(f"🔴 **A模块 (流动性)**: 得分过低 ({score_a:.1f})，显示 Fed 净流动性或 TGA 正在剧烈抽水。")
