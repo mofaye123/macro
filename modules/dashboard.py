@@ -286,32 +286,34 @@ def render_dashboard_standalone(df_all):
 
 
     with c_right:
-        # 1. 获取最新数据状态
         latest_tga = df_all['WTREGEN'].iloc[-1]
-        prev_tga_week = df_all['WTREGEN'].iloc[-8]  
-        
+        prev_tga_week = df_all['WTREGEN'].iloc[-8]
         latest_srf = df_all['RPONTSYD'].iloc[-1]
         latest_sofr = df_all['SOFR'].iloc[-1]
-        prev_sofr_month = df_all['SOFR'].iloc[-30] 
+        prev_sofr_month = df_all['SOFR'].iloc[-30]
         
-        # 2. 积分逻辑 
         score = 0
         
-        # 增加容忍度：增加小于 100 亿视为中性，不直接扣死
         tga_diff = (latest_tga - prev_tga_week) / 1000
-        if tga_diff < -10: score += 1   # 净放水 > 100亿
-        elif tga_diff > 10: score -= 1  # 净抽水 > 100亿
         
-        # 因子 B: SRF (绝对水平)
-        if latest_srf < 5: score += 1   # 急救室闲置
-        elif latest_srf > 50: score -= 2 # 急救室压力巨大 (双倍扣分)
+        if tga_diff < -10: score += 1   # 周度放水
+        elif tga_diff > 10: score -= 1  # 周度抽水
         
-        # 因子 C: SOFR (月度趋势)
+        if latest_tga >= 900:
+            score -= 3  
+        elif latest_tga >= 850:
+            score -= 2  
+        elif latest_tga >= 800:
+            score -= 1 
+            
+        if latest_srf < 5: score += 1
+        elif latest_srf > 50: score -= 2
+        
         sofr_diff = latest_sofr - prev_sofr_month
-        if sofr_diff < -0.05: score += 1 # 资金显著转松
-        elif sofr_diff > 0.10: score -= 1 # 资金显著收紧
+        if sofr_diff < -0.05: score += 1
+        elif sofr_diff > 0.10: score -= 1
         
-        # 3. 最终判定映射
+        # 3. 
         if score >= 1:
             status_text = f"🟢 流动性状态：NET INFLOW (净流入) [积分:{score}]"
             status_color = "#09ab3b"
