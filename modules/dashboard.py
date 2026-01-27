@@ -54,15 +54,15 @@ def render_dashboard_standalone(df_all):
     df_b['Score_Policy'] = (df_b['Score_Trend'] + df_b['Regime_Bonus']).clip(0, 100)
     
     df_b['F1_Spread'] = df_b['SOFR'] - df_b['IORB']
-    df_b['F1_Penalty'] = (df_b['F1_Spread'] - df_b['F1_Spread'].rolling(126, min_periods=1).median()).clip(lower=0)
+    df_b['F1_Penalty'] = (df_b['F1_Spread'] - df_b['F1_Spread'].rolling(60, min_periods=1).median()).clip(lower=0)
     df_b['Score_F1'] = df_b['F1_Penalty'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
     
     df_b['F2_Spread'] = df_b['SOFR'] - df_b['RRPONTSYAWARD']
-    df_b['F2_Dev'] = (df_b['F2_Spread'] - df_b['F2_Spread'].rolling(126, min_periods=1).median()).abs()
+    df_b['F2_Dev'] = (df_b['F2_Spread'] - df_b['F2_Spread'].rolling(60, min_periods=1).median()).abs()
     df_b['Score_F2'] = df_b['F2_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
     
     df_b['F3_Spread'] = df_b['TGCRRATE'] - df_b['SOFR']
-    df_b['F3_Dev'] = (df_b['F3_Spread'] - df_b['F3_Spread'].rolling(126, min_periods=1).median()).abs()
+    df_b['F3_Dev'] = (df_b['F3_Spread'] - df_b['F3_Spread'].rolling(60, min_periods=1).median()).abs()
     df_b['Score_F3'] = df_b['F3_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
     
     def get_srf_score(val):
