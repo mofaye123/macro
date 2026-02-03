@@ -159,7 +159,7 @@ def render_dashboard_standalone(df_all):
     df_e['Chg_USD'] = df_e['DTWEXBGS'].pct_change(63)
     df_e['Score_USD'] = (1 - df_e['Chg_USD'].rolling(1260, min_periods=1).rank(pct=True)) * 100
 
-    df_e['Chg_DXY'] = df_e['DTWEXAFEGS'].pct_change(63)
+    df_e['Chg_DXY'] = df_e['DXY'].pct_change(63)
     df_e['Score_DXY'] = (1 - df_e['Chg_DXY'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     
     df_e['Yen_Appreciation'] = -1 * df_e['DEXJPUS'].pct_change(63)
