@@ -5,14 +5,14 @@ from datetime import datetime, timedelta
 
 PROFESSIONAL_LIGHT_CSS = """
 <style>
-    /* 1. 全局背景：极淡的灰白，护眼 */
+    /* 1. 背景 */
     .stApp {
         background-color: #f8f9fa;
         color: #1f2937;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
-    /* 2. 卡片样式：纯白底 + 微阴影 (Apple风格) */
+    /* 2. 卡片样式 */
     .term-card {
         background: #ffffff;
         border: 1px solid #e5e7eb;
@@ -28,7 +28,7 @@ PROFESSIONAL_LIGHT_CSS = """
         border-color: #d1d5db;
     }
     
-    /* 3. 字体颜色定义 (适配浅色底) */
+    /* 3. 字体颜色定义 */
     .text-main { color: #111827; }
     .text-dim { color: #6b7280; font-size: 0.85em; font-weight: 500; }
     .text-green { color: #059669; font-weight: 600; } /* 深绿，对比度更高 */
@@ -66,12 +66,8 @@ PROFESSIONAL_LIGHT_CSS = """
 # Dashboard 逻辑
 # ==========================================
 def render_dashboard_standalone(df_all):
-    # 注入 CSS
     st.markdown(PROFESSIONAL_LIGHT_CSS, unsafe_allow_html=True)
 
-    # ----------------------------------------------------
-    # 1. 核心计算逻辑 (完全保留原代码)
-    # ----------------------------------------------------
     df_raw_a = df_all[df_all.index >= '2020-01-01'].copy()
     
     df_a = pd.DataFrame()
@@ -193,16 +189,12 @@ def render_dashboard_standalone(df_all):
     df_e['Score_Energy'] = df_e['Score_Oil'] * 0.5 + df_e['Score_Gas'] * 0.5
     df_e['Total_Score'] = (df_e['Score_USD'] * 0.20 + df_e['Score_DXY'] * 0.20 + df_e['Score_Yen_Total'] * 0.3 + df_e['Score_Energy'] * 0.3)
 
-    # --------------------------------------------------------
-    # 2. 准备渲染数据 (获取最新值)
-    # --------------------------------------------------------
     score_a = df_a['Total_Score'].iloc[-1]
     score_b = df_b['Total_Score'].iloc[-1]
     score_c = df_c['Total_Score'].iloc[-1]
     score_d = df_d['Total_Score'].iloc[-1]
     score_e = df_e['Total_Score'].iloc[-1]
     
-    # 变动 (WoW/MoM 根据原逻辑)
     chg_a = score_a - df_a['Total_Score'].iloc[-2] # vs上周
     chg_b = score_b - df_b['Total_Score'].iloc[-8] # vs上周
     chg_c = score_c - df_c['Total_Score'].iloc[-8]
@@ -213,14 +205,9 @@ def render_dashboard_standalone(df_all):
     prev_total = df_a['Total_Score'].iloc[-2]*0.25 + df_b['Total_Score'].iloc[-8]*0.25 + df_c['Total_Score'].iloc[-8]*0.15 + df_d['Total_Score'].iloc[-8]*0.15+ df_e['Total_Score'].iloc[-8]*0.20
     total_chg = total_score - prev_total
 
-    # --------------------------------------------------------
-    # 3. 渲染新 UI - 头部区域
-    # --------------------------------------------------------
-
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
-        # --- 1. 动态仪表盘颜色逻辑 ---
         if total_score < 20:
             gauge_color = "#dc2626" # 红色
         elif total_score < 40:
@@ -230,7 +217,7 @@ def render_dashboard_standalone(df_all):
         else:
             gauge_color = "#059669" # 绿色
 
-        # --- 2. Plotly 仪表盘 ---
+        # ---  Plotly 仪表盘 ---
         fig_gauge = go.Figure(go.Indicator(
             mode = "gauge+number",
             value = total_score,
@@ -265,7 +252,7 @@ def render_dashboard_standalone(df_all):
         st.markdown(f"""<div style="display:flex; flex-wrap:wrap; justify-content:center;">{pills_html}</div>""", unsafe_allow_html=True)
 
     with col_right:
-        # 趋势图 (适配浅色：深灰线)
+        # 趋势图
         st.markdown("""<div class="term-card" style="height: 100%;"><div style="display:flex; justify-content:space-between; margin-bottom:9px;"><div style="font-weight:bold; font-size:20px; color:#1f2937;">综合得分趋势 (Historical Trend)</div>""", unsafe_allow_html=True)
 
         lookback_years = st.slider("⏱️ 观察窗口 (年)", 1, 10, 5)
@@ -276,9 +263,9 @@ def render_dashboard_standalone(df_all):
         recent_trend = s_total_hist.tail(trading_days)
 
         fig_trend = go.Figure()
-        # 主线：深蓝
+        # 主线
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=recent_trend.values, name='综合得分', mode='lines', line=dict(color='#2563eb', width=2), fill='tozeroy', fillcolor='rgba(37, 99, 235, 0.05)'))
-        # 辅线：淡灰/淡彩
+        # 辅线
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=s_a_hist.loc[recent_trend.index], name='A.流动性', line=dict(color='#06b6d4', width=1, dash='dot'), visible='legendonly'))
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_b['Total_Score'].loc[recent_trend.index], name='B.资金面', line=dict(color='#8b5cf6', width=1, dash='dot'), visible='legendonly'))
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_c['Total_Score'].loc[recent_trend.index], name='C.国债', line=dict(color='#f59e0b', width=1, dash='dot'), visible='legendonly'))
@@ -299,7 +286,7 @@ def render_dashboard_standalone(df_all):
         st.markdown("</div>", unsafe_allow_html=True)
 
     # --------------------------------------------------------
-    # 4. 模块卡片区域 (HTML 生成) - 修复缩进问题
+    # 4. 模块卡片区域
     # --------------------------------------------------------
     st.markdown("""<div style="display:flex; align-items:center; margin: 30px 0 20px 0;"><div style="width:8px; height:8px; background:#2563eb; border-radius:50%; margin-right:10px;"></div><div style="font-size:14px; font-weight:700; color:#1f2937; letter-spacing:1px;">FACTOR MODULES</div><div style="flex:1; height:1px; background:#e5e7eb; margin-left:15px;"></div></div>""", unsafe_allow_html=True)
 
@@ -311,7 +298,6 @@ def render_dashboard_standalone(df_all):
         
         return f"""<div class="term-card"><div style="display:flex; justify-content:space-between; margin-bottom:10px;"><div><span style="background:#f3f4f6; color:#4b5563; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600;">MOD {mod_id}</span><span class="text-dim" style="text-transform:uppercase; margin-left:5px; font-size:10px;">{sub}</span><div style="font-size:16px; font-weight:bold; color:#111827; margin-top:5px;">{title}</div></div><div class="text-dim" style="font-family:monospace;">{weight}</div></div><div style="display:flex; align-items:baseline; gap:10px;"><span style="font-size:32px; font-weight:bold; color:#111827;">{score:.1f}</span><span class="{chg_cls}" style="font-size:12px; font-family:monospace;">{arrow} {abs(change):.1f}</span></div><div class="progress-bg"><div class="progress-bar" style="width: {score}%; background: {bar_color};"></div></div><div style="margin-top:15px; padding-top:10px; border-top:1px solid #f3f4f6; font-size:11px; color:#6b7280; display:flex; align-items:center;"><div style="width:6px; height:6px; background:{bar_color}; border-radius:50%; margin-right:6px;"></div>{desc}</div></div>"""
 
-    # 动态文案
     tga_curr = df_all['WTREGEN'].iloc[-1]
     desc_a = f"TGA水位过高 ({tga_curr/1000:.0f}B) 触发惩罚" if tga_curr >= 800000 else ("净流动性回落" if score_a < 40 else "净流动性趋势平稳")
     desc_b = "SOFR 突破 IORB" if df_all['SOFR'].iloc[-1] > df_all['IORB'].iloc[-1] else "回购市场利率控制良好"
@@ -326,7 +312,7 @@ def render_dashboard_standalone(df_all):
     with c4: st.markdown(create_card_html("D", "实际利率", "Real Rates", score_d, chg_d, "15%", desc_d), unsafe_allow_html=True)
     with c5: st.markdown(create_card_html("E", "外部冲击", "External", score_e, chg_e, "20%", desc_e), unsafe_allow_html=True)
     # --------------------------------------------------------
-    # 5. 保留的原有图表逻辑 (TGA/SOFR联动 & 真理检验)
+    # 5. 图表逻辑 
     # --------------------------------------------------------
     st.markdown("<br>", unsafe_allow_html=True)
     col_chart_1, col_chart_2 = st.columns(2)
@@ -387,7 +373,7 @@ def render_dashboard_standalone(df_all):
         
 
     with col_chart_2:
-        # 宏观分 vs 风险资产 (真理检验)
+        # 宏观分 vs 风险资产
         st.markdown(f"""<div class="term-card"><div style="font-weight:bold; color:#111827; margin-bottom:10px;">真理检验: 宏观分 vs SPX/BTC</div></div>""", unsafe_allow_html=True)
         
         valid_view = df_all[df_all.index >= (datetime.now() - timedelta(days=1080))]
@@ -414,14 +400,14 @@ def render_dashboard_standalone(df_all):
         st.plotly_chart(fig_spx, use_container_width=True)
 
     # --------------------------------------------------------
-    # 6. 风险雷达 (Text Output)
+    # 6. 风险雷达
     # --------------------------------------------------------
     st.divider()
     st.markdown("""<div style="display:flex; align-items:center; gap:10px; margin-bottom:15px;"><span style="font-size:20px;">📡</span><h3 style="margin:0; color:#111827;">RISK RADAR (风险雷达)</h3></div>""", unsafe_allow_html=True)
     
     risk_factors = []
     
-    # 逻辑判断 (原样保留)
+    # 逻辑判断 
     tga_val_check = tga_curr / 1000 if tga_curr > 10000 else tga_curr
     if tga_val_check >= 800:
         p_val, p_level = ("0.5x", "🔴") if tga_val_check >= 900 else (("0.6x", "🟠") if tga_val_check >= 850 else ("0.8x", "🟡"))
@@ -453,7 +439,7 @@ def render_dashboard_standalone(df_all):
             risk_factors.append(f"🟠 **E模块 (能源)**: 油价短期飙升 (>15%)，通胀风险增加。")
     except: pass
 
-    # 渲染雷达结果 (同样使用紧凑 HTML)
+    # 渲染雷达结果
     if not risk_factors:
         st.markdown("""<div class="term-card" style="border-left: 4px solid #059669; background:#ecfdf5;"><div style="color:#065f46; font-weight:bold;">✅ SYSTEM NOMINAL</div><div style="color:#374151; font-size:13px; margin-top:5px;">宏观环境相对平稳。</div></div>""", unsafe_allow_html=True)
     else:
@@ -465,4 +451,4 @@ def render_dashboard_standalone(df_all):
         st.markdown("""<div style="background:#1e293b; padding:15px; border-radius:8px; font-size:13px; color:#cbd5e1; line-height:1.6;"><b>1. 动态权重逻辑：</b><br>A/B/C/D/E 基础权重为 25/25/15/15/20。一旦触发特殊风险（如 TGA>800B 或 利率急涨），模型会强制施加 <span style="color:#ff3b30">惩罚系数 (Penalty Factor)</span>，导致总分断崖式下跌。<br><br><b>2. 状态判定：</b><br>🟢 NET INFLOW: 积分 ≥ 1 (放水环境)<br>🔴 NET OUTFLOW: 积分 ≤ -1 (抽水环境)<br><br><b>3. 风险雷达：</b><br>不要只看总分。上方红色警报若出现，代表宏观支柱出现裂痕，即使总分尚可，尾部风险也极高。</div>""", unsafe_allow_html=True)
 
     # 底部版权
-    st.markdown("""<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V2.5 // INTERNAL USE ONLY // POWERED BY STREAMLIT & PLOTLY</div>""", unsafe_allow_html=True)
+    st.markdown("""<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V1.2 // INTERNAL USE ONLY // DATA SOURCE: FRED & Yahoo</div>""", unsafe_allow_html=True)
