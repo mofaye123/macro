@@ -93,7 +93,7 @@ def render_module_e(df_all):
     with col2:
         fig_usd = go.Figure()
         if 'DTWEXAFEGS' in df_view.columns:
-            fig_usd.add_trace(go.Scatter(x=df_view.index, y=df_view['DTWEXAFEGS'], name='DXY (Major)', line=dict(color='#2ca02c', width=2)))
+            fig_usd.add_trace(go.Scatter(x=df_view.index, y=df_view['DXY'], name='DXY Index', line=dict(color='#2ca02c', width=2)))
         fig_usd.add_trace(go.Scatter(x=df_view.index, y=df_view['DTWEXBGS'], name='Broad USD', line=dict(color='#888', width=2, dash='dot'), yaxis='y2'))
         
         fig_usd.update_layout(height=350, title="美元指数", 
@@ -163,7 +163,7 @@ def render_module_e(df_all):
         <div class="glossary-box">
             <div class="glossary-title">因子 3：美元指数 (The Dollar)</div>
             <div class="glossary-content">
-                <b>1. DXY Major (金融属性)：</b> 以欧元、日元为主。<br>
+                <b>1. DXY (金融属性)：</b> 以欧元、日元为主。<br>
                 <span class="glossary-label">逻辑：</span> 主要影响发达国家市场和金融衍生品。DXY 飙升通常代表全球金融体系在“去杠杆”，是避险模式 (Risk-Off) 的特征。<br><br>
                 <b>2. Broad Dollar (贸易属性)：</b> 包含人民币、比索等主要贸易伙伴货币。<br>
                 <span class="glossary-label">逻辑：</span> 主要影响实体经济和新兴市场。该指数走强，意味着全球贸易融资成本变贵，新兴市场偿债压力剧增，易引发债务违约危机。
