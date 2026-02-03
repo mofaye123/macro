@@ -15,23 +15,12 @@ def render_module_e(df_all):
     # 2. 因子计算 
     # ==========================================
     
-    if 'DXY' in df.columns:
-        # DXY (涨=坏)
-        df['Chg_DXY'] = df['DXY'].pct_change(63)
-        # 计算分位得分
-        df['Score_DXY'] = (1 - df['Chg_DXY'].rolling(1260, min_periods=1).rank(pct=True)) * 100
-    else:
-        # 如果获取失败，给一个默认中性分
-        df['DXY'] = 0
-        df['Score_DXY'] = 50 
-        st.error("缺失 DXY 数据 (Yahoo Finance)")
+    df['Chg_DXY'] = df['DXY'].pct_change(63)
+    df['Score_DXY'] = (1 - df['Chg_DXY'].rolling(1260, min_periods=1).rank(pct=True)) * 100
 
     # 美元流动性 (Broad Dollar - FRED)
-    if 'DTWEXBGS' in df.columns:
-        df['Chg_USD'] = df['DTWEXBGS'].pct_change(63) 
-        df['Score_USD'] = (1 - df['Chg_USD'].rolling(1260, min_periods=1).rank(pct=True)) * 100
-    else:
-        df['Score_USD'] = 50
+    df['Chg_USD'] = df['DTWEXBGS'].pct_change(63) 
+    df['Score_USD'] = (1 - df['Chg_USD'].rolling(1260, min_periods=1).rank(pct=True)) * 100
 
    
     # 日元 (USD/JPY 跌 = 坏)
