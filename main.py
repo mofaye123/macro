@@ -27,7 +27,7 @@ st.title("宏观金融环境模块因子量化")
 # 数据加载
 # ==========================================
 with st.spinner('正在同步美联储全量数据...'):
-    df_all = get_fred_data(API_KEY, SERIES_IDS, start_date='2010-01-01')
+    df_all = get_mixed_data(API_KEY, SERIES_IDS, start_date='2010-01-01')
 
 # ==========================================
 # 主逻辑
