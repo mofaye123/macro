@@ -64,8 +64,8 @@ def render_module_e(df_all):
         </div>
     """, unsafe_allow_html=True)
 
-    c2.metric("DXY Index (Major)（非DXY Index）", f"{latest['DTWEXAFEGS']:.2f}", 
-                  f"{(latest['DTWEXAFEGS'] - prev_week['DTWEXAFEGS']):.2f}(vs上周)", delta_color="inverse")
+    c2.metric("DXY Index ", f"{latest['DXY']:.2f}", 
+                  f"{(latest['DXY'] - prev_week['DXY']):.2f}(vs上周)", delta_color="inverse")
     c3.metric("日本无抵押隔夜拆借利率", f"{latest['IRSTCI01JPM156N']:.3f}%", f"{(latest['IRSTCI01JPM156N'] - prev_week['IRSTCI01JPM156N']):.3f}% (vs上周)", delta_color="inverse")
     c4.metric("WTI 原油", f"${latest['DCOILWTICO']:.1f}", f"{(latest['DCOILWTICO'] - prev_week['DCOILWTICO']):.1f} (vs上周)", delta_color="inverse")
 
@@ -76,7 +76,7 @@ def render_module_e(df_all):
         col = "#09ab3b" if val > 50 else "#ff2b2b"
         return f"""<div class="sub-card"><div class="sub-label">{label}</div><div class="sub-value" style="color:{col}">{val:.1f}</div></div>"""
     s1.markdown(sub_card("美元流动性 (20%)", latest['Score_USD']), unsafe_allow_html=True)
-    s2.markdown(sub_card("DXY Major (非DXY Index）(20%)", latest['Score_DXY']), unsafe_allow_html=True) 
+    s2.markdown(sub_card("DXY (20%)", latest['Score_DXY']), unsafe_allow_html=True) 
     s3.markdown(sub_card("日元套息压力 (30%)", latest['Score_Yen_Total']), unsafe_allow_html=True)      
     s4.markdown(sub_card("能源成本压力 (30%)", latest['Score_Energy']), unsafe_allow_html=True)
 
