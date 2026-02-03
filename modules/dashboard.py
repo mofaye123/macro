@@ -352,7 +352,7 @@ def render_dashboard_standalone(df_all):
             status_text = "⚪ NEUTRAL"
             status_color = "#d4af37"
 
-        st.markdown(f"""<div class="term-card"><div style="font-weight:bold; color:#111827; margin-bottom:10px;">TGA / SOFR 联动监测 <span style="color:{status_color}; margin-left:10px;">{status_text}</span></div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="term-card"><div style="font-weight:bold; color:#111827; margin-bottom:10px;">TGA / SOFR / SRF 联动监测 <span style="color:{status_color}; margin-left:10px;">{status_text}</span></div></div>""", unsafe_allow_html=True)
         
         dview = df_all[df_all.index >= '2023-01-01']
         fig_cross = go.Figure()
