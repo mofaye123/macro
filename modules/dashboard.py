@@ -448,7 +448,30 @@ def render_dashboard_standalone(df_all):
     # 7. 说明书
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📖 Dashboard 使用说明书"):
-        st.markdown("""<div style="background:#1e293b; padding:15px; border-radius:8px; font-size:13px; color:#cbd5e1; line-height:1.6;"><b>1. 动态权重逻辑：</b><br>A/B/C/D/E 基础权重为 25/25/15/15/20。一旦触发特殊风险（如 TGA>800B 或 利率急涨），模型会强制施加 <span style="color:#ff3b30">惩罚系数 (Penalty Factor)</span>，导致总分断崖式下跌。<br><br><b>2. 状态判定：</b><br>🟢 NET INFLOW: 积分 ≥ 1 (放水环境)<br>🔴 NET OUTFLOW: 积分 ≤ -1 (抽水环境)<br><br><b>3. 风险雷达：</b><br>不要只看总分。上方红色警报若出现，代表宏观支柱出现裂痕，即使总分尚可，尾部风险也极高。</div>""", unsafe_allow_html=True)
+        st.markdown("""
+        <div class="glossary-box" style="border-left: 4px solid #333;">
+            <div class="glossary-title">宏观量化逻辑：模块风险判断 & 动态惩罚</div>
+            <div class="glossary-content">
+                本模型并非简单的加权平均，而是旨在模拟宏观环境的脆弱性。核心逻辑在于识别各个模块因子风险。<br><br>
+                <b>1. 常态环境 (Normal Regime)：</b><br>
+                当市场平稳时，A/B/C/D/E 按照 25/25/15/15/20 的权重线性叠加，反映整体水位。<br><br>
+                <b>2. 动态惩罚 - 坏的时候权重增大：</b><br>
+                宏观环境危机往往由单一因子做为导火索从而引发更大规模的危机。为了捕捉这种非线性风险，模型内置了动态调控惩罚机制：
+                <br>
+                &nbsp;&nbsp;🛑 <b>A模块 (TGA 抽水)</b>：监测财政部账户存量。当 TGA > 800B 时触发阶梯惩罚系数 (0.8x / 0.6x / 0.5x)，即使趋势向好，高绝对水位也会强行压制得分。
+                <br>
+                &nbsp;&nbsp;🛑 <b>B模块 (SRF)</b>：一旦监测到银行开始使用 SRF (急救贷款)，说明流动性传导失效。此时 B 模块内部权重重组，SRF 权重瞬间拉满，直接拉低B模块总分。
+                <br>
+                &nbsp;&nbsp;🛑 <b>C模块 (利率急涨)</b>：市场不怕高利率，怕急涨。若 10Y/30Y 利率在 60天内快速上涨，C 模块总分会直接乘以惩罚系数 (例如 0.2-0.8x)，模拟“杀估值”效应。
+                <br><br>
+                <b>3. 如何解读“流入/流出”动态标题？</b><br>
+                标题基于<b>积分权重制</b>判定。当 TGA 周度放水、SRF 闲置及资金成本稳定等因子贡献积分 ≥ 1 时，判定为 🟢 NET INFLOW。反之，若积分 ≤ -1 (如 TGA 高位且抽水)，则判定为 🔴 NET OUTFLOW。
+                <br><br>
+                <b>4. 如何使用本看板？</b><br>
+                不要只看总分。请重点关注上方的风险雷达。如果出现红色警报，说明宏观环境的某一根支柱出现了裂痕，此时即便其他模块得分很高，整体环境也是极其脆弱的。
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # 底部版权
     st.markdown("""<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V1.2 // INTERNAL USE ONLY // DATA SOURCE: FRED & Yahoo</div>""", unsafe_allow_html=True)
