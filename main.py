@@ -38,7 +38,7 @@ if not df_all.empty:
     est_tz = pytz.timezone('US/Eastern')
     now_est = datetime.now(est_tz)
     if latest_date > datetime.now(): 
-        date_display = f"{now_est.strftime('%Y-%m-%d %H:%M')} (美东实时)"
+        date_display = f"{now_est.strftime('%Y-%m-%d %H:%M:%S')} (美东实时)"
     else:
         date_display = latest_date.strftime('%Y-%m-%d') 
 
