@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 
 # 1. 导入配置和数据引擎
-from config import API_KEY, SERIES_IDS, CSS_STYLE
+from config import API_KEY, GEMINI_API_KEY, SERIES_IDS, CSS_STYLE
 from data_engine import get_mixed_data
 
 # 2. 导入各个业务模块
