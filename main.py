@@ -21,7 +21,7 @@ from modules.module_e import render_module_e
 st.set_page_config(page_title="宏观金融环境量化", layout="wide", page_icon="📈")
 st.markdown(CSS_STYLE, unsafe_allow_html=True)
 
-st.title("宏观金融环境  |  模块因子量化")
+st.title("宏观金融环境模块因子量化")
 
 # ==========================================
 # 数据加载
