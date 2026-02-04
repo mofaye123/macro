@@ -1,6 +1,7 @@
 streamlit
 pandas
+numpy<2
 fredapi
 plotly
-google
-yahoo
+yfinance
+google-genai
