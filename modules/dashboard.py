@@ -288,7 +288,7 @@ def render_dashboard_standalone(df_all):
     # --------------------------------------------------------
     # 4. 模块卡片区域
     # --------------------------------------------------------
-    st.markdown("""<div style="display:flex; align-items:center; margin: 30px 0 20px 0;"><div style="width:8px; height:8px; background:#2563eb; border-radius:50%; margin-right:10px;"></div><div style="font-size:14px; font-weight:700; color:#1f2937; letter-spacing:1px;">FACTOR MODULES</div><div style="flex:1; height:1px; background:#e5e7eb; margin-left:15px;"></div></div>""", unsafe_allow_html=True)
+    st.markdown("""<div style="display:flex; align-items:center; margin: 30px 0 20px 0;"><div style="width:8px; height:8px; background:#2563eb; border-radius:50%; margin-right:10px;"></div><div style="font-size:14px; font-weight:700; color:#1f2937; letter-spacing:1px;">因子模块</div><div style="flex:1; height:1px; background:#e5e7eb; margin-left:15px;"></div></div>""", unsafe_allow_html=True)
 
     def create_card_html(mod_id, title, sub, score, change, weight, desc):
         color_cls = "text-green" if score >= 60 else ("text-gold" if score >= 40 else "text-red")
