@@ -3,4 +3,3 @@ pandas
 fredapi
 plotly
 yfinance
-pytz
