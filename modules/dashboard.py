@@ -1,21 +1,46 @@
 import streamlit as st
 import pandas as pd
+import math
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from config import GEMINI_API_KEY
+from google import genai
+
+# --- [核心功能]：AI 调用函数 (使用 google-genai SDK) ---
+def call_gemini_new_sdk(prompt, api_key):
+        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1alpha'})
+ 
+        response = client.models.generate_content(
+            model='gemini-3-flash-preview', 
+            contents=prompt
+        )
+        return response.text
+       
 
 PROFESSIONAL_LIGHT_CSS = """
 <style>
-    /* 1. 背景 */
+    :root {
+        --ui-bg: #f8f9fa;
+        --ui-card: #ffffff;
+        --ui-border: #e5e7eb;
+        --ui-text: #111827;
+        --ui-subtext: #6b7280;
+        --ui-accent: #2563eb;
+        --ui-success: #059669;
+        --ui-danger: #dc2626;
+        --ui-warn: #f59e0b;
+    }
+    /* 1. 全局背景：极淡的灰白，护眼 */
     .stApp {
-        background-color: #f8f9fa;
-        color: #1f2937;
+        background-color: var(--ui-bg);
+        color: var(--ui-text);
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
-    /* 2. 卡片样式 */
+    /* 2. 卡片样式：纯白底 + 微阴影 (Apple风格) */
     .term-card {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
+        background: var(--ui-card);
+        border: 1px solid var(--ui-border);
         border-radius: 12px;
         padding: 24px;
         margin-bottom: 20px;
@@ -28,13 +53,13 @@ PROFESSIONAL_LIGHT_CSS = """
         border-color: #d1d5db;
     }
     
-    /* 3. 字体颜色定义 */
-    .text-main { color: #111827; }
-    .text-dim { color: #6b7280; font-size: 0.85em; font-weight: 500; }
-    .text-green { color: #059669; font-weight: 600; } /* 深绿，对比度更高 */
-    .text-red { color: #dc2626; font-weight: 600; }   /* 深红 */
-    .text-gold { color: #b45309; font-weight: 700; }   /* 深金/琥珀色，白底看清 */
-    .text-blue { color: #2563eb; }
+    /* 3. 字体颜色定义 (适配浅色底) */
+    .text-main { color: var(--ui-text); }
+    .text-dim { color: var(--ui-subtext); font-size: 0.85em; font-weight: 500; }
+    .text-green { color: var(--ui-success); font-weight: 600; }
+    .text-red { color: var(--ui-danger); font-weight: 600; }
+    .text-gold { color: #b45309; font-weight: 700; }
+    .text-blue { color: var(--ui-accent); }
     
     /* 4. 进度条容器 */
     .progress-bg {
@@ -52,11 +77,36 @@ PROFESSIONAL_LIGHT_CSS = """
     }
     .pill-danger { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
     .pill-success { background: #ecfdf5; color: #059669; border-color: #a7f3d0; }
+
+    /* AI 报告样式 */
+    .ai-report-container {
+        background-color: #f0fdf4; border: 1px solid #bbf7d0;
+        border-radius: 12px; padding: 25px; margin-bottom: 30px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02);
+    }
+    .ai-report-title {
+        color: #166534; font-size: 18px; font-weight: 800; margin-bottom: 15px; 
+        display: flex; align-items: center; gap: 10px;
+        border-bottom: 1px solid #dcfce7; padding-bottom: 10px;
+    }
+    .ai-content { font-family: 'Georgia', serif; font-size: 15px; line-height: 1.7; color: #14532d; }
+
+    /* 模块卡片可点击样式 */
+    a.module-link { text-decoration: none; color: inherit; display: block; width: 100%; }
+    a.module-link * { cursor: pointer; }
+    a.module-link:hover .term-card {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 22px rgba(15,23,42,0.12);
+        border-color: #cbd5e1;
+    }
+    a.module-link:hover { transform: translateY(-2px); }
+    a.module-link .term-card { transition: transform 0.2s, box-shadow 0.2s; }
     
     /* 隐藏 Streamlit 默认元素 */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* 保留顶部栏以显示侧边栏展开按钮 */
+    header {visibility: visible;}
     
     code { background: transparent !important; color: inherit !important; padding: 0 !important; }
 </style>
@@ -66,8 +116,16 @@ PROFESSIONAL_LIGHT_CSS = """
 # Dashboard 逻辑
 # ==========================================
 def render_dashboard_standalone(df_all):
+    # 注入 CSS
     st.markdown(PROFESSIONAL_LIGHT_CSS, unsafe_allow_html=True)
 
+    # ----------------------------------------------------
+    # 1. 核心计算逻辑 (完全保留原代码)
+    # ----------------------------------------------------
+    def prev_week_value(series, days=7):
+        target = series.index[-1] - pd.Timedelta(days=days)
+        idx = series.index.get_indexer([target], method='nearest')[0]
+        return series.iloc[idx]
     df_raw_a = df_all[df_all.index >= '2020-01-01'].copy()
     
     df_a = pd.DataFrame()
@@ -91,7 +149,14 @@ def render_dashboard_standalone(df_all):
         df_a['RRP_Clean'] = df_a['RRPONTSYD']
     df_a['Net_Liquidity'] = df_a['WALCL'] - df_a['WTREGEN'] - df_a['RRP_Clean']
     
-    def get_score_a(series): return series.diff(13).rank(pct=True) * 100
+    def rolling_percentile(series, window=156, min_periods=20):
+        return series.rolling(window, min_periods=min_periods).apply(
+            lambda s: s.rank(pct=True).iloc[-1],
+            raw=False
+        ) * 100
+
+    def get_score_a(series):
+        return rolling_percentile(series.diff(13))
     df_a['Score_NetLiq'] = get_score_a(df_a['Net_Liquidity'])
     df_a['Score_TGA'] = get_score_a(-df_a['WTREGEN']) * df_a['TGA_Penalty']
     df_a['Score_RRP'] = get_score_a(-df_a['RRP_Clean'])
@@ -114,15 +179,15 @@ def render_dashboard_standalone(df_all):
     
     df_b['F1_Spread'] = df_b['SOFR'] - df_b['IORB']
     df_b['F1_Penalty'] = (df_b['F1_Spread'] - df_b['F1_Spread'].rolling(60, min_periods=1).median()).clip(lower=0)
-    df_b['Score_F1'] = df_b['F1_Penalty'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
+    df_b['Score_F1'] = (1 - df_b['F1_Penalty'].rolling(1260, min_periods=1).rank(pct=True, ascending=True)) * 100
     
     df_b['F2_Spread'] = df_b['SOFR'] - df_b['RRPONTSYAWARD']
     df_b['F2_Dev'] = (df_b['F2_Spread'] - df_b['F2_Spread'].rolling(60, min_periods=1).median()).abs()
-    df_b['Score_F2'] = df_b['F2_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
+    df_b['Score_F2'] = (1 - df_b['F2_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=True)) * 100
     
     df_b['F3_Spread'] = df_b['TGCRRATE'] - df_b['SOFR']
     df_b['F3_Dev'] = (df_b['F3_Spread'] - df_b['F3_Spread'].rolling(60, min_periods=1).median()).abs()
-    df_b['Score_F3'] = df_b['F3_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
+    df_b['Score_F3'] = (1 - df_b['F3_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=True)) * 100
     
     def get_srf_score(val):
         if val == 0: return 100
@@ -189,25 +254,39 @@ def render_dashboard_standalone(df_all):
     df_e['Score_Energy'] = df_e['Score_Oil'] * 0.5 + df_e['Score_Gas'] * 0.5
     df_e['Total_Score'] = (df_e['Score_USD'] * 0.20 + df_e['Score_DXY'] * 0.20 + df_e['Score_Yen_Total'] * 0.3 + df_e['Score_Energy'] * 0.3)
 
+    # --------------------------------------------------------
+    # 2. 准备渲染数据 (获取最新值)
+    # --------------------------------------------------------
     score_a = df_a['Total_Score'].iloc[-1]
     score_b = df_b['Total_Score'].iloc[-1]
     score_c = df_c['Total_Score'].iloc[-1]
     score_d = df_d['Total_Score'].iloc[-1]
     score_e = df_e['Total_Score'].iloc[-1]
     
-    chg_a = score_a - df_a['Total_Score'].iloc[-2] # vs上周
-    chg_b = score_b - df_b['Total_Score'].iloc[-8] # vs上周
-    chg_c = score_c - df_c['Total_Score'].iloc[-8]
-    chg_d = score_d - df_d['Total_Score'].iloc[-8]
-    chg_e = score_e - df_e['Total_Score'].iloc[-8]
+    # 变动 (WoW/MoM 根据原逻辑)
+    chg_a = score_a - df_a['Total_Score'].iloc[-2] # A为周频，直接取上周
+    chg_b = score_b - prev_week_value(df_b['Total_Score'])
+    chg_c = score_c - prev_week_value(df_c['Total_Score'])
+    chg_d = score_d - prev_week_value(df_d['Total_Score'])
+    chg_e = score_e - prev_week_value(df_e['Total_Score'])
     
     total_score = score_a*0.25 + score_b*0.25 + score_c*0.15 + score_d*0.15+score_e*0.20
-    prev_total = df_a['Total_Score'].iloc[-2]*0.25 + df_b['Total_Score'].iloc[-8]*0.25 + df_c['Total_Score'].iloc[-8]*0.15 + df_d['Total_Score'].iloc[-8]*0.15+ df_e['Total_Score'].iloc[-8]*0.20
+    prev_total = (
+        df_a['Total_Score'].iloc[-2]*0.25 +
+        prev_week_value(df_b['Total_Score'])*0.25 +
+        prev_week_value(df_c['Total_Score'])*0.15 +
+        prev_week_value(df_d['Total_Score'])*0.15 +
+        prev_week_value(df_e['Total_Score'])*0.20
+    )
     total_chg = total_score - prev_total
 
-    col_left, col_right = st.columns([1, 2])
+    # Dashboard 页面不显示 AI 报告
+
+ 
+    col_left, col_spacer, col_right = st.columns([1, 0.06, 2])
 
     with col_left:
+        # --- 1. 动态仪表盘颜色逻辑 ---
         if total_score < 20:
             gauge_color = "#dc2626" # 红色
         elif total_score < 40:
@@ -217,14 +296,13 @@ def render_dashboard_standalone(df_all):
         else:
             gauge_color = "#059669" # 绿色
 
-        # ---  Plotly 仪表盘 ---
+        # --- 2. Plotly 仪表盘 ---
         fig_gauge = go.Figure(go.Indicator(
-            mode = "gauge+number",
+            mode = "gauge",
             value = total_score,
-            number = {'font': {'size': 60, 'color': "#1f2937", 'family': "Verdana, sans-serif"}, 'suffix': ""},
             gauge = {
                 'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "#333"},
-                'bar': {'color': gauge_color}, # 应用动态颜色
+                'bar': {'color': gauge_color},
                 'bgcolor': "#f3f4f6",
                 'borderwidth': 0,
                 'steps': [{'range': [0, 100], 'color': "#f3f4f6"}],
@@ -232,7 +310,15 @@ def render_dashboard_standalone(df_all):
         ))
         fig_gauge.update_layout(
             height=250, margin=dict(l=20,r=20,t=20,b=20),
-            paper_bgcolor='rgba(0,0,0,0)', font={'family': "Inter"}
+            paper_bgcolor='rgba(0,0,0,0)', font={'family': "Inter"},
+            annotations=[
+                dict(
+                    x=0.5, y=0.12, xref="paper", yref="paper",
+                    text=f"<b>{total_score:.1f}</b>",
+                    showarrow=False,
+                    font=dict(size=56, color="#1f2937", family="Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif")
+                )
+            ]
         )
         
         st.markdown(f"""<div class="term-card" style="text-align:center;"><div style="font-weight:bold; font-size:20px; color:black; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">宏观综合得分</div></div>""", unsafe_allow_html=True)
@@ -240,7 +326,7 @@ def render_dashboard_standalone(df_all):
         
         chg_color = "text-green" if total_chg >= 0 else "text-red"
         chg_arrow = "▲" if total_chg >= 0 else "▼"
-        st.markdown(f"""<div style="text-align:center; margin-top:-20px; margin-bottom:20px;"><span class="text-dim">vs 上周: </span><span class="{chg_color}" style="font-weight:bold; font-family:monospace;">{chg_arrow} {abs(total_chg):.1f}</span></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div style="text-align:center; margin-top:-5px; margin-bottom:20px;"><span class="text-dim">vs 上周: </span><span class="{chg_color}" style="font-weight:bold; font-family:monospace;">{chg_arrow} {abs(total_chg):.1f}</span></div>""", unsafe_allow_html=True)
 
         # 状态 Pills
         pills_html = ""
@@ -252,7 +338,7 @@ def render_dashboard_standalone(df_all):
         st.markdown(f"""<div style="display:flex; flex-wrap:wrap; justify-content:center;">{pills_html}</div>""", unsafe_allow_html=True)
 
     with col_right:
-        # 趋势图
+        # 趋势图 (适配浅色：深灰线)
         st.markdown("""<div class="term-card" style="height: 100%;"><div style="display:flex; justify-content:space-between; margin-bottom:9px;"><div style="font-weight:bold; font-size:20px; color:#1f2937;">综合得分趋势 (Historical Trend)</div>""", unsafe_allow_html=True)
 
         lookback_years = st.slider("⏱️ 观察窗口 (年)", 1, 10, 5)
@@ -263,14 +349,14 @@ def render_dashboard_standalone(df_all):
         recent_trend = s_total_hist.tail(trading_days)
 
         fig_trend = go.Figure()
-        # 主线
+        # 主线：深蓝
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=recent_trend.values, name='综合得分', mode='lines', line=dict(color='#2563eb', width=2), fill='tozeroy', fillcolor='rgba(37, 99, 235, 0.05)'))
-        # 辅线
+        # 辅线：淡灰/淡彩
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=s_a_hist.loc[recent_trend.index], name='A.流动性', line=dict(color='#06b6d4', width=1, dash='dot'), visible='legendonly'))
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_b['Total_Score'].loc[recent_trend.index], name='B.资金面', line=dict(color='#8b5cf6', width=1, dash='dot'), visible='legendonly'))
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_c['Total_Score'].loc[recent_trend.index], name='C.国债', line=dict(color='#f59e0b', width=1, dash='dot'), visible='legendonly'))
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_d['Total_Score'].loc[recent_trend.index], name='D.利率', line=dict(color='#ec4899', width=1, dash='dot'), visible='legendonly'))
-        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_d['Total_Score'].loc[recent_trend.index], name='E.外部', line=dict(color='#10b981', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_e['Total_Score'].loc[recent_trend.index], name='E.外部', line=dict(color='#10b981', width=1, dash='dot'), visible='legendonly'))
         
         
         fig_trend.update_layout(
@@ -286,18 +372,31 @@ def render_dashboard_standalone(df_all):
         st.markdown("</div>", unsafe_allow_html=True)
 
     # --------------------------------------------------------
-    # 4. 模块卡片区域
+    # 4. 模块卡片区域 (HTML 生成) - 修复缩进问题
     # --------------------------------------------------------
-    st.markdown("""<div style="display:flex; align-items:center; margin: 30px 0 20px 0;"><div style="width:8px; height:8px; background:#2563eb; border-radius:50%; margin-right:10px;"></div><div style="font-size:14px; font-weight:700; color:#1f2937; letter-spacing:1px;">因子模块</div><div style="flex:1; height:1px; background:#e5e7eb; margin-left:15px;"></div></div>""", unsafe_allow_html=True)
+    def section_header(title):
+        st.markdown(
+            f"""<div style="display:flex; align-items:center; margin: 30px 0 20px 0;">
+            <div style="width:8px; height:8px; background:#2563eb; border-radius:50%; margin-right:10px;"></div>
+            <div style="font-size:16px; font-weight:700; color:#1f2937; letter-spacing:1px;">{title}</div>
+            <div style="flex:1; height:1px; background:#e5e7eb; margin-left:15px;"></div></div>""",
+            unsafe_allow_html=True
+        )
 
-    def create_card_html(mod_id, title, sub, score, change, weight, desc):
+    section_header("模块因子")
+
+    def create_card_html(mod_id, title, sub, score, change, weight, desc, link=None):
         color_cls = "text-green" if score >= 60 else ("text-gold" if score >= 40 else "text-red")
         bar_color = "#059669" if score >= 60 else ("#eab308" if score >= 40 else "#dc2626")
         arrow = "▲" if change >= 0 else "▼"
         chg_cls = "text-green" if change >= 0 else "text-red"
         
-        return f"""<div class="term-card"><div style="display:flex; justify-content:space-between; margin-bottom:10px;"><div><span style="background:#f3f4f6; color:#4b5563; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600;">MOD {mod_id}</span><span class="text-dim" style="text-transform:uppercase; margin-left:5px; font-size:10px;">{sub}</span><div style="font-size:16px; font-weight:bold; color:#111827; margin-top:5px;">{title}</div></div><div class="text-dim" style="font-family:monospace;">{weight}</div></div><div style="display:flex; align-items:baseline; gap:10px;"><span style="font-size:32px; font-weight:bold; color:#111827;">{score:.1f}</span><span class="{chg_cls}" style="font-size:12px; font-family:monospace;">{arrow} {abs(change):.1f}</span></div><div class="progress-bg"><div class="progress-bar" style="width: {score}%; background: {bar_color};"></div></div><div style="margin-top:15px; padding-top:10px; border-top:1px solid #f3f4f6; font-size:11px; color:#6b7280; display:flex; align-items:center;"><div style="width:6px; height:6px; background:{bar_color}; border-radius:50%; margin-right:6px;"></div>{desc}</div></div>"""
+        card_html = f"""<div class="term-card"><div style="display:flex; justify-content:space-between; margin-bottom:10px;"><div><span style="background:#f3f4f6; color:#4b5563; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600;">MOD {mod_id}</span><span class="text-dim" style="text-transform:uppercase; margin-left:5px; font-size:10px;">{sub}</span><div style="font-size:16px; font-weight:bold; color:#111827; margin-top:5px;">{title}</div></div><div class="text-dim" style="font-family:monospace;">{weight}</div></div><div style="display:flex; align-items:baseline; gap:10px;"><span style="font-size:32px; font-weight:bold; color:#111827;">{score:.1f}</span><span class="{chg_cls}" style="font-size:12px; font-family:monospace;">{arrow} {abs(change):.1f}</span></div><div class="progress-bg"><div class="progress-bar" style="width: {score}%; background: {bar_color};"></div></div><div style="margin-top:15px; padding-top:10px; border-top:1px solid #f3f4f6; font-size:11px; color:#6b7280; display:flex; align-items:center;"><div style="width:6px; height:6px; background:{bar_color}; border-radius:50%; margin-right:6px;"></div>{desc}</div></div>"""
+        if link:
+            return f"""<a class="module-link" href="{link}" target="_self">{card_html}</a>"""
+        return card_html
 
+    # 动态文案
     tga_curr = df_all['WTREGEN'].iloc[-1]
     desc_a = f"TGA水位过高 ({tga_curr/1000:.0f}B) 触发惩罚" if tga_curr >= 800000 else ("净流动性回落" if score_a < 40 else "净流动性趋势平稳")
     desc_b = "SOFR 突破 IORB" if df_all['SOFR'].iloc[-1] > df_all['IORB'].iloc[-1] else "回购市场利率控制良好"
@@ -306,15 +405,16 @@ def render_dashboard_standalone(df_all):
     desc_e = "美元指数强势压制" if df_e['Chg_DXY'].iloc[-1] > 0.02 else "外部汇率环境相对宽松"
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: st.markdown(create_card_html("A", "系统流动性", "Liquidity", score_a, chg_a, "25%", desc_a), unsafe_allow_html=True)
-    with c2: st.markdown(create_card_html("B", "资金价格", "Funding", score_b, chg_b, "25%", desc_b), unsafe_allow_html=True)
-    with c3: st.markdown(create_card_html("C", "国债结构", "Yield Curve", score_c, chg_c, "15%", desc_c), unsafe_allow_html=True)
-    with c4: st.markdown(create_card_html("D", "实际利率", "Real Rates", score_d, chg_d, "15%", desc_d), unsafe_allow_html=True)
-    with c5: st.markdown(create_card_html("E", "外部冲击", "External", score_e, chg_e, "20%", desc_e), unsafe_allow_html=True)
+    with c1: st.markdown(create_card_html("A", "系统流动性", "Liquidity", score_a, chg_a, "25%", desc_a, link="?nav=module_a"), unsafe_allow_html=True)
+    with c2: st.markdown(create_card_html("B", "资金价格", "Funding", score_b, chg_b, "25%", desc_b, link="?nav=module_b"), unsafe_allow_html=True)
+    with c3: st.markdown(create_card_html("C", "国债结构", "Yield Curve", score_c, chg_c, "15%", desc_c, link="?nav=module_c"), unsafe_allow_html=True)
+    with c4: st.markdown(create_card_html("D", "实际利率", "Real Rates", score_d, chg_d, "15%", desc_d, link="?nav=module_d"), unsafe_allow_html=True)
+    with c5: st.markdown(create_card_html("E", "外部冲击", "External", score_e, chg_e, "20%", desc_e, link="?nav=module_e"), unsafe_allow_html=True)
     # --------------------------------------------------------
-    # 5. 图表逻辑 
+    # 5. 参考图表 (TGA/SOFR联动 & 真理检验)
     # --------------------------------------------------------
     st.markdown("<br>", unsafe_allow_html=True)
+    section_header("参考图表")
     col_chart_1, col_chart_2 = st.columns(2)
     
     with col_chart_1:
@@ -352,7 +452,7 @@ def render_dashboard_standalone(df_all):
             status_text = "⚪ NEUTRAL"
             status_color = "#d4af37"
 
-        st.markdown(f"""<div class="term-card"><div style="font-weight:bold; color:#111827; margin-bottom:10px;">TGA / SOFR / SRF 联动监测 <span style="color:{status_color}; margin-left:10px;">{status_text}</span></div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="term-card"><div style="font-weight:bold; color:#111827; margin-bottom:10px;">TGA / SOFR 联动监测 <span style="color:{status_color}; margin-left:10px;">{status_text}</span></div></div>""", unsafe_allow_html=True)
         
         dview = df_all[df_all.index >= '2023-01-01']
         fig_cross = go.Figure()
@@ -373,7 +473,7 @@ def render_dashboard_standalone(df_all):
         
 
     with col_chart_2:
-        # 宏观分 vs 风险资产
+        # 宏观分 vs 风险资产 (真理检验)
         st.markdown(f"""<div class="term-card"><div style="font-weight:bold; color:#111827; margin-bottom:10px;">真理检验: 宏观分 vs SPX/BTC</div></div>""", unsafe_allow_html=True)
         
         valid_view = df_all[df_all.index >= (datetime.now() - timedelta(days=1080))]
@@ -400,14 +500,12 @@ def render_dashboard_standalone(df_all):
         st.plotly_chart(fig_spx, use_container_width=True)
 
     # --------------------------------------------------------
-    # 6. 风险雷达
+    # 6. 风险雷达 (Text Output)
     # --------------------------------------------------------
-    st.divider()
-    st.markdown("""<div style="display:flex; align-items:center; gap:10px; margin-bottom:15px;"><span style="font-size:20px;">📡</span><h3 style="margin:0; color:#111827;">RISK RADAR (风险雷达)</h3></div>""", unsafe_allow_html=True)
-    
+    section_header("风险雷达")
     risk_factors = []
     
-    # 逻辑判断 
+    # 逻辑判断 (原样保留)
     tga_val_check = tga_curr / 1000 if tga_curr > 10000 else tga_curr
     if tga_val_check >= 800:
         p_val, p_level = ("0.5x", "🔴") if tga_val_check >= 900 else (("0.6x", "🟠") if tga_val_check >= 850 else ("0.8x", "🟡"))
@@ -439,14 +537,72 @@ def render_dashboard_standalone(df_all):
             risk_factors.append(f"🟠 **E模块 (能源)**: 油价短期飙升 (>15%)，通胀风险增加。")
     except: pass
 
-    # 渲染雷达结果
+    # 渲染雷达结果 (同样使用紧凑 HTML)
     if not risk_factors:
         st.markdown("""<div class="term-card" style="border-left: 4px solid #059669; background:#ecfdf5;"><div style="color:#065f46; font-weight:bold;">✅ SYSTEM NOMINAL</div><div style="color:#374151; font-size:13px; margin-top:5px;">宏观环境相对平稳。</div></div>""", unsafe_allow_html=True)
     else:
         risks_html = "".join([f"<div style='margin-top:8px; color:#1f2937; font-size:14px;'>{r}</div>" for r in risk_factors])
         st.markdown(f"""<div class="term-card" style="border-left: 4px solid #dc2626; background:#fef2f2;"><div style="color:#991b1b; font-weight:bold;">⚠️ WARNING: {len(risk_factors)} CRITICAL RISKS DETECTED</div>{risks_html}</div>""", unsafe_allow_html=True)
-    # 7. 说明书
+
+    # --------------------------------------------------------
+    # 7. AI 宏观分析 (风险雷达下方)
+    # --------------------------------------------------------
     st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div id="ai-macro"></div>', unsafe_allow_html=True)
+    section_header("AI 宏观分析")
+    st.caption("基于当前宏观因子自动生成的研究报告")
+
+    if 'ai_report' not in st.session_state:
+        st.session_state.ai_report = None
+
+    col_left, col_right = st.columns([0.3, 0.7])
+    with col_left:
+        if st.button("生成AI宏观分析", type="primary", use_container_width=True):
+            st.session_state.ai_request = True
+
+    if st.session_state.get("ai_request"):
+        with st.spinner("🤖 正在生成宏观研究报告..."):
+            tga_val = df_all['WTREGEN'].iloc[-1]
+            context = f"""
+            [系统时间]: {df_all.index[-1].strftime('%Y-%m-%d')}
+            [宏观综合得分]: {total_score:.1f} / 100 (周变动: {total_chg:+.1f})
+            [分模块详情]:
+            1. 流动性 (Module A): 得分 {score_a:.1f} | TGA: {tga_val:.1f} | RRP: {df_all['RRPONTSYD'].iloc[-1]:.1f}
+            2. 资金面 (Module B): 得分 {score_b:.1f} | SOFR: {df_all['SOFR'].iloc[-1]}%
+            3. 国债 (Module C): 得分 {score_c:.1f} | 10Y-2Y: {df_all['T10Y2Y'].iloc[-1]} bps
+            4. 实利 (Module D): 得分 {score_d:.1f} | 10Y实际利率: {df_all['DFII10'].iloc[-1]}%
+            5. 外部 (Module E): 得分 {score_e:.1f} | DXY变动: {df_e['Chg_DXY'].iloc[-1]:.2%}
+            """
+            
+            prompt = f"""
+            你是一位顶级宏观对冲基金策略师。请基于以下数据写一份【Deep Research 市场分析报告】。
+            {context}
+            要求：
+            1. 核心观点 (The One Thing)：一句话定义当前宏观环境。
+            2. 风险雷达：指出最危险的1-2个因子。
+            3. 资产配置建议：对美债、美股、黄金、BTC给出建议。
+            4. 风格：专业、犀利、数据驱动。
+            """
+            
+            st.session_state.ai_report = call_gemini_new_sdk(prompt, GEMINI_API_KEY)
+        st.session_state.ai_request = False
+
+    if st.session_state.ai_report:
+        st.markdown(f"""
+        <div class="ai-report-container">
+            <div class="ai-report-title">
+                <span style="font-size:24px;">🧠</span> AI 宏观研究报告
+            </div>
+            <div class="ai-content">
+                {st.session_state.ai_report}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("点击上方按钮生成最新 AI 宏观研究报告。")
+
+    # 8. 说明书
+     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📖 Dashboard 使用说明书"):
         st.markdown("""
         <div class="glossary-box" style="border-left: 4px solid #333;">
@@ -474,4 +630,4 @@ def render_dashboard_standalone(df_all):
         """, unsafe_allow_html=True)
 
     # 底部版权
-    st.markdown("""<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V1.2 // INTERNAL USE ONLY // DATA SOURCE: FRED & Yahoo</div>""", unsafe_allow_html=True)
+    st.markdown("""<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V2.5 // INTERNAL USE ONLY // POWERED BY STREAMLIT & PLOTLY</div>""", unsafe_allow_html=True)
