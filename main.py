@@ -2,7 +2,6 @@
 import streamlit as st
 from datetime import datetime
 import pandas as pd
-import pytz
 
 # 1. 导入配置和数据引擎
 from config import API_KEY, SERIES_IDS, CSS_STYLE
@@ -22,7 +21,7 @@ from modules.module_e import render_module_e
 st.set_page_config(page_title="宏观金融环境量化", layout="wide", page_icon="📈")
 st.markdown(CSS_STYLE, unsafe_allow_html=True)
 
-st.title("宏观金融环境 | 模块因子量化")
+st.title("宏观金融环境  |  模块因子量化")
 
 # ==========================================
 # 数据加载
@@ -35,13 +34,7 @@ with st.spinner('正在同步美联储全量数据...'):
 # ==========================================
 if not df_all.empty:
     latest_date = df_all.index[-1]
-    est_tz = pytz.timezone('US/Eastern')
-    now_est = datetime.now(est_tz)
-    if latest_date > datetime.now(): 
-        date_display = f"{now_est.strftime('%Y-%m-%d %H:%M:%S')} (美东实时)"
-    else:
-        date_display = latest_date.strftime('%Y-%m-%d') 
-
+    date_display = f"{datetime.now().strftime('%Y-%m-%d')} (实时)" if latest_date > datetime.now() else latest_date.strftime('%Y-%m-%d')
     st.markdown(f"#### 📅 数据截至: **{date_display}**")
     st.markdown("---")
 
