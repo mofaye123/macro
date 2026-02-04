@@ -244,7 +244,7 @@ def render_dashboard_standalone(df_all):
 
         # 状态 Pills
         pills_html = ""
-        tga_diff_val = df_all['WTREGEN'].iloc[-1] - df_all['WTREGEN'].iloc[-8]
+        tga_diff_val = df_all['WTREGEN'].iloc[-1] - df_all['WTREGEN'].iloc[-3]
         pills_html += f'<span class="status-pill {"pill-danger" if tga_diff_val > 0 else "pill-success"}">💧 TGA {"抽水" if tga_diff_val > 0 else "放水"}</span>'
         pills_html += f'<span class="status-pill {"pill-danger" if df_all["T10Y2Y"].iloc[-1] < 0 else "pill-success"}">{"📉 倒挂" if df_all["T10Y2Y"].iloc[-1] < 0 else " 10Y-2Y利差正常"}</span>'
         pills_html += f'<span class="status-pill {"pill-danger" if df_all["RPONTSYD"].iloc[-1] > 1 else "pill-success"}">{"🏦 SRF 启用" if df_all["RPONTSYD"].iloc[-1] > 1 else " SRF 闲置"}</span>'
