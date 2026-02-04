@@ -602,7 +602,7 @@ def render_dashboard_standalone(df_all):
         st.info("点击上方按钮生成最新 AI 宏观研究报告。")
 
     # 8. 说明书
-     st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📖 Dashboard 使用说明书"):
         st.markdown("""
         <div class="glossary-box" style="border-left: 4px solid #333;">
