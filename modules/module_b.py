@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from datetime import timedelta
 
@@ -15,6 +16,11 @@ def render_module_b(df_raw):
     2. 摩擦压力 (60%): 天花板/地板/分裂 + SRF预警
     """
     df = df_raw.copy().dropna()
+
+    def prev_week_row(frame, days=7):
+        target = frame.index[-1] - pd.Timedelta(days=days)
+        idx = frame.index.get_indexer([target], method='nearest')[0]
+        return frame.iloc[idx]
     
     # ========================================
     # Part 1: 政策利率制度评分
@@ -45,59 +51,49 @@ def render_module_b(df_raw):
     # Part 2: 走廊摩擦压力评分
     # ========================================
     
-    # 2.1 摩擦因子1: SOFR-IORB (天花板穿透监控)
+    # 2.1 走廊宽度 (用于相对归一)
+    df['Corridor_Width'] = (df['IORB'] - df['RRPONTSYAWARD']).abs().clip(lower=0.05)
+
+    # 2.2 摩擦因子1: SOFR-IORB (天花板穿透)
     df['F1_Spread'] = df['SOFR'] - df['IORB']
-    df['F1_Baseline'] = df['F1_Spread'].rolling(60, min_periods=1).median()
-    df['F1_Dev'] = df['F1_Spread'] - df['F1_Baseline']
-    
-    #  只惩罚正向穿透
-    df['F1_Penalty'] = df['F1_Dev'].clip(lower=0)  # 负数归零
-    df['Score_F1'] = df['F1_Penalty'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
-    
-    # 2.2 摩擦因子2: SOFR-RRP (地板距离监控)
+    df['F1_Ratio'] = df['F1_Spread'].clip(lower=0) / df['Corridor_Width']
+
+    # 2.3 摩擦因子2: SOFR-RRP (地板偏离)
     df['F2_Spread'] = df['SOFR'] - df['RRPONTSYAWARD']
-    df['F2_Baseline'] = df['F2_Spread'].rolling(60, min_periods=1).median()
-    df['F2_Dev'] = (df['F2_Spread'] - df['F2_Baseline']).abs()  # 双向监控
-    df['Score_F2'] = df['F2_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
-    
-    # 2.3 摩擦因子3: TGCR-SOFR (回购市场分裂)
+    df['F2_Ratio'] = df['F2_Spread'].abs() / df['Corridor_Width']
+
+    # 2.4 摩擦因子3: TGCR-SOFR (回购市场分裂)
     df['F3_Spread'] = df['TGCRRATE'] - df['SOFR']
-    df['F3_Baseline'] = df['F3_Spread'].rolling(60, min_periods=1).median()
-    df['F3_Dev'] = (df['F3_Spread'] - df['F3_Baseline']).abs()
-    df['Score_F3'] = df['F3_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
-    
-    # 2.4 SRF预警因子 
-    def get_srf_score(srf_value):
-        """SRF用量越高，得分越低"""
-        if srf_value == 0:
-            return 100  # 无使用 = 最佳
-        elif srf_value < 10:   # <100亿 (单位B)
-            return 80
-        elif srf_value < 25:  # 100-250亿
-            return 50
-        elif srf_value < 50:  # 250-500亿
-            return 20
-        else:
-            return 0   # >500亿 = 危机
-    
-    df['Score_SRF'] = df['RPONTSYD'].apply(get_srf_score)
-    
-    # 2.5 动态权重逻辑
-    def get_friction_weights(srf_value):
-        """SRF暴涨时提升其权重"""
-        if srf_value > 10:  # 非正常模式
-            return {'F1': 0.15, 'F2': 0.15, 'F3': 0.10, 'SRF': 0.60}
-        else:  # 正常模式
-            return {'F1': 0.33, 'F2': 0.33, 'F3': 0.33, 'SRF': 0}
-    
-    # 2.6 计算摩擦压力分数
-    df['Score_Friction'] = df.apply(
-        lambda row: (
-            row['Score_F1'] * get_friction_weights(row['RPONTSYD'])['F1'] +
-            row['Score_F2'] * get_friction_weights(row['RPONTSYD'])['F2'] +
-            row['Score_F3'] * get_friction_weights(row['RPONTSYD'])['F3'] +
-            row['Score_SRF'] * get_friction_weights(row['RPONTSYD'])['SRF']
-        ), axis=1
+    df['F3_Ratio'] = df['F3_Spread'].abs() / df['Corridor_Width']
+
+    def ratio_to_score(series, max_ratio_series):
+        denom = max_ratio_series.replace(0, np.nan).ffill().fillna(0.5)
+        scaled = (series / denom).clip(lower=0, upper=1)
+        return (1 - scaled**1.6) * 100
+
+    # 高敏：滚动 180 天 85% 分位作为动态上限
+    df['F1_Max'] = df['F1_Ratio'].rolling(180, min_periods=60).quantile(0.85)
+    df['F2_Max'] = df['F2_Ratio'].rolling(180, min_periods=60).quantile(0.85)
+    df['F3_Max'] = df['F3_Ratio'].rolling(180, min_periods=60).quantile(0.85)
+
+    df['Score_F1'] = ratio_to_score(df['F1_Ratio'], df['F1_Max'])
+    df['Score_F2'] = ratio_to_score(df['F2_Ratio'], df['F2_Max'])
+    df['Score_F3'] = ratio_to_score(df['F3_Ratio'], df['F3_Max'])
+
+    # 2.5 SRF 连续惩罚 (平滑，不跳变，中心点 5B)
+    df['SRF_Penalty_Base'] = 100 / (1 + np.exp(-0.6 * (df['RPONTSYD'] - 5)))
+    df['SRF_Accel'] = df['RPONTSYD'].diff(3).clip(lower=0)
+    df['SRF_Penalty'] = (df['SRF_Penalty_Base'] + (df['SRF_Accel'] / 20).clip(0, 1) * 35).clip(0, 100)
+    df['Score_SRF'] = 100 - df['SRF_Penalty']
+
+    # 2.6 动态权重（SRF 不主宰）
+    df['SRF_Weight'] = 0.10 + 0.15 * (df['SRF_Penalty'] / 100)
+    residual = 1 - df['SRF_Weight']
+    df['Score_Friction'] = (
+        df['Score_F1'] * residual * 0.4 +
+        df['Score_F2'] * residual * 0.3 +
+        df['Score_F3'] * residual * 0.3 +
+        df['Score_SRF'] * df['SRF_Weight']
     )
     
     # ========================================
@@ -114,7 +110,7 @@ def render_module_b(df_raw):
     df_view = df[df.index >= '2021-01-01'].copy()
     latest = df.iloc[-1]
     prev = df.iloc[-2]
-    prev_week = df.iloc[-8]
+    prev_week = prev_week_row(df)
     
     # --- KPI 卡片 ---
     c1, c2, c3, c4 = st.columns(4)
@@ -192,6 +188,44 @@ def render_module_b(df_raw):
         yaxis=dict(range=[0, 100], title='Score', showgrid=True)
     )
     st.plotly_chart(fig_score, use_container_width=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    # --- 图表2: 走廊宽度 ---
+    fig_corridor = go.Figure()
+    fig_corridor.add_trace(go.Scatter(
+        x=df_view.index, y=df_view['Corridor_Width'],
+        name='IORB - RRP 走廊宽度',
+        line=dict(color='#64748b', width=2)
+    ))
+    fig_corridor.update_layout(
+        height=260,
+        title="走廊宽度 (IORB - RRP)",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        hovermode="x unified",
+        yaxis=dict(showgrid=True, gridcolor='#f3f4f6')
+    )
+    st.plotly_chart(fig_corridor, use_container_width=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    # --- 图表3: SRF 权重 ---
+    fig_srf_w = go.Figure()
+    fig_srf_w.add_trace(go.Scatter(
+        x=df_view.index, y=df_view['SRF_Weight'],
+        name='SRF 权重',
+        line=dict(color='#ef4444', width=2)
+    ))
+    fig_srf_w.add_hline(y=0.20, line_dash="dash", line_color="#dc2626",
+                        annotation_text="警戒线 20%", annotation_position="right")
+    fig_srf_w.update_layout(
+        height=260,
+        title="SRF 权重 (10% ~ 25%)",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        hovermode="x unified",
+        yaxis=dict(range=[0, 0.3], tickformat=".0%", showgrid=True, gridcolor='#f3f4f6')
+    )
+    st.plotly_chart(fig_srf_w, use_container_width=True)
     
     # --- 图表2: 利率走廊 ---
     fig_corridor = go.Figure()
