@@ -330,8 +330,14 @@ def render_dashboard_standalone(df_all):
 
         # 状态 Pills
         pills_html = ""
-        tga_diff_val = df_all['WTREGEN'].iloc[-1] - df_all['WTREGEN'].iloc[-9]
-        pills_html += f'<span class="status-pill {"pill-danger" if tga_diff_val > 0 else "pill-success"}">💧 TGA {"抽水" if tga_diff_val > 0 else "放水"}</span>'
+        tga_latest = df_all['WTREGEN'].iloc[-1]
+        tga_prev = df_all['WTREGEN'].iloc[-9]
+        # 统一到“十亿美元”尺度判断（与模型惩罚逻辑一致）
+        tga_latest_b = tga_latest / 1000 if tga_latest > 10000 else tga_latest
+        tga_prev_b = tga_prev / 1000 if tga_prev > 10000 else tga_prev
+        tga_diff_b = tga_latest_b - tga_prev_b
+        tga_is_drain = True if tga_latest_b > 800 else (tga_diff_b > 0)
+        pills_html += f'<span class="status-pill {"pill-danger" if tga_is_drain else "pill-success"}">💧 TGA {"抽水" if tga_is_drain else "放水"}</span>'
         pills_html += f'<span class="status-pill {"pill-danger" if df_all["T10Y2Y"].iloc[-1] < 0 else "pill-success"}">{"📉 倒挂" if df_all["T10Y2Y"].iloc[-1] < 0 else " 10Y-2Y利差正常"}</span>'
         pills_html += f'<span class="status-pill {"pill-danger" if df_all["RPONTSYD"].iloc[-1] > 1 else "pill-success"}">{"🏦 SRF 启用" if df_all["RPONTSYD"].iloc[-1] > 1 else " SRF 闲置"}</span>'
         
