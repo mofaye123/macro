@@ -458,7 +458,7 @@ def render_dashboard_standalone(df_all):
         chg_cls = "text-green" if change >= 0 else "text-red"
         
         card_html = f"""<div class="term-card module-card"><div style="display:flex; justify-content:space-between; margin-bottom:10px;"><div><span style="background:#f3f4f6; color:#4b5563; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600;">MOD {mod_id}</span><span class="text-dim" style="text-transform:uppercase; margin-left:5px; font-size:10px;">{sub}</span><div style="font-size:16px; font-weight:bold; color:#111827; margin-top:5px;">{title}</div></div><div class="text-dim" style="font-family:monospace;">{weight}</div></div><div style="display:flex; align-items:baseline; gap:10px;"><span style="font-size:32px; font-weight:bold; color:#111827;">{score:.1f}</span><span class="{chg_cls}" style="font-size:12px; font-family:monospace;">{arrow} {abs(change):.1f}</span></div><div class="progress-bg"><div class="progress-bar" style="width: {score}%; background: {bar_color};"></div></div><div class="module-footer" style="margin-top:15px; padding-top:10px; border-top:1px solid #f3f4f6; font-size:11px; color:#6b7280; display:flex; align-items:center;"><div style="width:6px; height:6px; background:{bar_color}; border-radius:50%; margin-right:6px;"></div><span class="module-desc">{desc}</span></div></div>"""
-          if link:
+        if link:
             return f"""<a class="module-link" href="{link}" target="_self">{card_html}</a>"""
         return card_html
 
