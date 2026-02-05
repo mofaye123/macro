@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import math
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
@@ -142,12 +143,34 @@ def render_dashboard_standalone(df_all):
         elif 850 <= tga_b < 900: return 0.6
         else: return 0.5
     
-    df_a['TGA_Penalty'] = df_a['WTREGEN'].apply(get_tga_penalty)
+    tga_b = df_a['WTREGEN'].where(df_a['WTREGEN'] <= 10000, df_a['WTREGEN'] / 1000)
+    df_a['TGA_Penalty_Level'] = tga_b.apply(get_tga_penalty)
+
+    def get_tga_trend_penalty(delta_b):
+        if delta_b <= 0: return 1.0
+        elif delta_b <= 50: return 0.95
+        elif delta_b <= 100: return 0.9
+        elif delta_b <= 150: return 0.8
+        else: return 0.7
+
+    df_a['TGA_Change_4W'] = tga_b.diff(4).fillna(0)
+    df_a['TGA_Penalty_Trend'] = df_a['TGA_Change_4W'].apply(get_tga_trend_penalty)
+    df_a['TGA_Penalty_Total'] = df_a['TGA_Penalty_Level'] * df_a['TGA_Penalty_Trend']
     if df_a['RRPONTSYD'].mean() < 10000:
         df_a['RRP_Clean'] = df_a['RRPONTSYD'] * 1000
     else:
         df_a['RRP_Clean'] = df_a['RRPONTSYD']
     df_a['Net_Liquidity'] = df_a['WALCL'] - df_a['WTREGEN'] - df_a['RRP_Clean']
+
+    df_a['Liquidity_Sink'] = df_a['WTREGEN'] + df_a['RRP_Clean']
+    df_a['Liquidity_Sink_Ratio'] = (df_a['Liquidity_Sink'] / df_a['WALCL']).clip(lower=0)
+    def sink_penalty_ratio(r):
+        if r < 0.10: return 1.0
+        elif r < 0.15: return 0.9
+        elif r < 0.20: return 0.8
+        elif r < 0.25: return 0.7
+        else: return 0.6
+    df_a['Sink_Penalty'] = df_a['Liquidity_Sink_Ratio'].apply(sink_penalty_ratio)
     
     def rolling_percentile(series, window=156, min_periods=20):
         return series.rolling(window, min_periods=min_periods).apply(
@@ -158,10 +181,17 @@ def render_dashboard_standalone(df_all):
     def get_score_a(series):
         return rolling_percentile(series.diff(13))
     df_a['Score_NetLiq'] = get_score_a(df_a['Net_Liquidity'])
-    df_a['Score_TGA'] = get_score_a(-df_a['WTREGEN']) * df_a['TGA_Penalty']
+    df_a['Score_TGA'] = get_score_a(-df_a['WTREGEN'])
     df_a['Score_RRP'] = get_score_a(-df_a['RRP_Clean'])
     df_a['Score_Reserves'] = get_score_a(df_a['WRESBAL'])
-    df_a['Total_Score'] = (df_a['Score_NetLiq']*0.5 + df_a['Score_TGA']*0.2 + df_a['Score_RRP']*0.2 + df_a['Score_Reserves']*0.1)
+    base_total_a = (df_a['Score_NetLiq']*0.45 + df_a['Score_TGA']*0.2 + df_a['Score_RRP']*0.25 + df_a['Score_Reserves']*0.1)
+    df_a['Score_NetLiq_Adj'] = df_a['Score_NetLiq'] * df_a['Sink_Penalty']
+    df_a['Total_Score'] = (
+        df_a['Score_NetLiq_Adj'] * 0.45 +
+        df_a['Score_TGA'] * 0.2 +
+        df_a['Score_RRP'] * 0.25 +
+        df_a['Score_Reserves'] * 0.1
+    ) * df_a['TGA_Penalty_Total']
 
     # 模块 B
     df_b = df_all.copy().dropna() 
@@ -177,31 +207,43 @@ def render_dashboard_standalone(df_all):
     df_b['Regime_Bonus'] = df_b['SOFR'].apply(get_regime_bonus)
     df_b['Score_Policy'] = (df_b['Score_Trend'] + df_b['Regime_Bonus']).clip(0, 100)
     
+    df_b['Corridor_Width'] = (df_b['IORB'] - df_b['RRPONTSYAWARD']).abs().clip(lower=0.05)
+
     df_b['F1_Spread'] = df_b['SOFR'] - df_b['IORB']
-    df_b['F1_Penalty'] = (df_b['F1_Spread'] - df_b['F1_Spread'].rolling(60, min_periods=1).median()).clip(lower=0)
-    df_b['Score_F1'] = (1 - df_b['F1_Penalty'].rolling(1260, min_periods=1).rank(pct=True, ascending=True)) * 100
-    
+    df_b['F1_Ratio'] = df_b['F1_Spread'].clip(lower=0) / df_b['Corridor_Width']
+
     df_b['F2_Spread'] = df_b['SOFR'] - df_b['RRPONTSYAWARD']
-    df_b['F2_Dev'] = (df_b['F2_Spread'] - df_b['F2_Spread'].rolling(60, min_periods=1).median()).abs()
-    df_b['Score_F2'] = (1 - df_b['F2_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=True)) * 100
-    
+    df_b['F2_Ratio'] = df_b['F2_Spread'].abs() / df_b['Corridor_Width']
+
     df_b['F3_Spread'] = df_b['TGCRRATE'] - df_b['SOFR']
-    df_b['F3_Dev'] = (df_b['F3_Spread'] - df_b['F3_Spread'].rolling(60, min_periods=1).median()).abs()
-    df_b['Score_F3'] = (1 - df_b['F3_Dev'].rolling(1260, min_periods=1).rank(pct=True, ascending=True)) * 100
-    
-    def get_srf_score(val):
-        if val == 0: return 100
-        elif val < 10: return 80
-        elif val < 25: return 50
-        elif val < 50: return 20
-        else: return 0
-    df_b['Score_SRF'] = df_b['RPONTSYD'].apply(get_srf_score)
-    
-    def get_friction_w(row):
-        if row['RPONTSYD'] > 10: return {'F1':0.15, 'F2':0.15, 'F3':0.10, 'SRF':0.60}
-        else: return {'F1':0.33, 'F2':0.33, 'F3':0.33, 'SRF':0}
-    
-    df_b['Score_Friction'] = df_b.apply(lambda r: (r['Score_F1']*get_friction_w(r)['F1'] + r['Score_F2']*get_friction_w(r)['F2'] + r['Score_F3']*get_friction_w(r)['F3'] + r['Score_SRF']*get_friction_w(r)['SRF']), axis=1)
+    df_b['F3_Ratio'] = df_b['F3_Spread'].abs() / df_b['Corridor_Width']
+
+    def ratio_to_score(series, max_ratio_series):
+        denom = max_ratio_series.replace(0, np.nan).ffill().fillna(0.5)
+        scaled = (series / denom).clip(lower=0, upper=1)
+        return (1 - scaled**1.6) * 100
+
+    df_b['F1_Max'] = df_b['F1_Ratio'].rolling(180, min_periods=60).quantile(0.85)
+    df_b['F2_Max'] = df_b['F2_Ratio'].rolling(180, min_periods=60).quantile(0.85)
+    df_b['F3_Max'] = df_b['F3_Ratio'].rolling(180, min_periods=60).quantile(0.85)
+
+    df_b['Score_F1'] = ratio_to_score(df_b['F1_Ratio'], df_b['F1_Max'])
+    df_b['Score_F2'] = ratio_to_score(df_b['F2_Ratio'], df_b['F2_Max'])
+    df_b['Score_F3'] = ratio_to_score(df_b['F3_Ratio'], df_b['F3_Max'])
+
+    df_b['SRF_Penalty_Base'] = 100 / (1 + np.exp(-0.6 * (df_b['RPONTSYD'] - 5)))
+    df_b['SRF_Accel'] = df_b['RPONTSYD'].diff(3).clip(lower=0)
+    df_b['SRF_Penalty'] = (df_b['SRF_Penalty_Base'] + (df_b['SRF_Accel'] / 20).clip(0, 1) * 35).clip(0, 100)
+    df_b['Score_SRF'] = 100 - df_b['SRF_Penalty']
+
+    df_b['SRF_Weight'] = 0.10 + 0.15 * (df_b['SRF_Penalty'] / 100)
+    residual = 1 - df_b['SRF_Weight']
+    df_b['Score_Friction'] = (
+        df_b['Score_F1'] * residual * 0.4 +
+        df_b['Score_F2'] * residual * 0.3 +
+        df_b['Score_F3'] * residual * 0.3 +
+        df_b['Score_SRF'] * df_b['SRF_Weight']
+    )
     df_b['Total_Score'] = df_b['Score_Policy'] * 0.40 + df_b['Score_Friction'] * 0.60
 
     # 模块 C
@@ -404,7 +446,12 @@ def render_dashboard_standalone(df_all):
 
     # 动态文案
     tga_curr = df_all['WTREGEN'].iloc[-1]
-    desc_a = f"TGA水位过高 ({tga_curr/1000:.0f}B) 触发惩罚" if tga_curr >= 800000 else ("净流动性回落" if score_a < 40 else "净流动性趋势平稳")
+    tga_penalty_now = df_a['TGA_Penalty_Total'].iloc[-1] if 'TGA_Penalty_Total' in df_a.columns else 1.0
+    sink_penalty_now = df_a['Sink_Penalty'].iloc[-1] if 'Sink_Penalty' in df_a.columns else 1.0
+    if tga_curr >= 800000:
+        desc_a = f"TGA水位过高 ({tga_curr/1000:.0f}B) · 惩罚 {tga_penalty_now:.2f}x / 吸收惩罚 {sink_penalty_now:.2f}x"
+    else:
+        desc_a = f"吸收惩罚 {sink_penalty_now:.2f}x" if sink_penalty_now < 0.9 else ("净流动性回落" if score_a < 40 else "净流动性趋势平稳")
     desc_b = "SOFR 突破 IORB" if df_all['SOFR'].iloc[-1] > df_all['IORB'].iloc[-1] else "回购市场利率控制良好"
     desc_c = f"长端动量惩罚 ({df_c['Penalty_Factor'].iloc[-1]}x)" if df_c['Penalty_Factor'].iloc[-1] < 1.0 else ("深度倒挂 >50bps" if df_all['T10Y2Y'].iloc[-1] < -0.5 else "期限结构健康")
     desc_d = f"通胀预期 {df_all['T10YIE'].iloc[-1]:.2f}%"
@@ -594,16 +641,19 @@ def render_dashboard_standalone(df_all):
         st.session_state.ai_request = False
 
     if st.session_state.ai_report:
-        st.markdown(f"""
-        <div class="ai-report-container">
-            <div class="ai-report-title">
-                <span style="font-size:24px;">🧠</span> AI 宏观研究报告
+        st.markdown(
+            f"""
+            <div class="ai-report-container">
+                <div class="ai-report-title">
+                    <span style="font-size:24px;">🧠</span> AI 宏观研究报告
+                </div>
+                <div class="ai-content">
+                    {st.session_state.ai_report}
+                </div>
             </div>
-            <div class="ai-content">
-                {st.session_state.ai_report}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """,
+            unsafe_allow_html=True,
+        )
     else:
         st.info("点击上方按钮生成最新 AI 宏观研究报告。")
 
@@ -636,4 +686,7 @@ def render_dashboard_standalone(df_all):
         """, unsafe_allow_html=True)
 
     # 底部版权
-    st.markdown("""<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V2.5 // INTERNAL USE ONLY // POWERED BY STREAMLIT & PLOTLY</div>""", unsafe_allow_html=True)
+    st.markdown(
+        """<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V2.5 // INTERNAL USE ONLY // POWERED BY STREAMLIT & PLOTLY</div>""",
+        unsafe_allow_html=True,
+    )
