@@ -13,7 +13,17 @@ def render_module_d(df_raw):
     1. 实际利率 (Real Rates): 名义 - 通胀预期。它是“真实”的资金成本。越低越好。
     2. 通胀预期 (Breakeven): MID_BEST 逻辑 (太高=通胀失控，太低=通缩衰退)
     """
-    df = df_raw.copy().dropna()
+    df = df_raw.copy()
+    required_cols = ['DFII10', 'DFII5', 'T10YIE']
+    if df.dropna(subset=required_cols).empty:
+        st.warning("D模块数据不足（实际利率/通胀预期），请稍后刷新。")
+        return
+    df = df.dropna(subset=required_cols)
+
+    def prev_week_row(frame, days=7):
+        target = frame.index[-1] - pd.Timedelta(days=days)
+        idx = frame.index.get_indexer([target], method='nearest')[0]
+        return frame.iloc[idx]
     
     # --- 1. 因子计算 ---
     # 1.1 实际利率得分 (越低越好)
@@ -45,7 +55,7 @@ def render_module_d(df_raw):
     # --- 3. 页面展示 ---
     latest = df.iloc[-1]
     prev = df.iloc[-2]
-    prev_week = df.iloc[-8]
+    prev_week = prev_week_row(df)
 
     # KPI
     c1, c2, c3, c4 = st.columns(4)
