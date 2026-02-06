@@ -14,6 +14,8 @@ from modules.module_b import render_module_b
 from modules.module_c import render_module_c
 from modules.module_d import render_module_d
 from modules.module_e import render_module_e
+from modules.module_f import render_module_f
+from modules.module_g import render_module_g
 
 # ==========================================
 # 页面初始化
@@ -39,6 +41,8 @@ if not df_all.empty:
         ("C. 国债期限结构", "module_c"),
         ("D. 实际利率与通胀", "module_d"),
         ("E. 外部冲击与汇率", "module_e"),
+        ("F. 信用压力", "module_f"),
+        ("G. 风险偏好", "module_g"),
         
     ]
     nav_labels = [n[0] for n in nav_items]
@@ -97,6 +101,9 @@ if not df_all.empty:
         render_module_d(df_all)
     elif nav_choice == "E. 外部冲击与汇率":
         render_module_e(df_all)
+    elif nav_choice == "F. 信用压力":
+        render_module_f(df_all)
+    elif nav_choice == "G. 风险偏好":
+        render_module_g(df_all)
 else:
     st.error("数据加载失败，请检查网络或 API Key。")
-
