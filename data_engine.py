@@ -27,23 +27,29 @@ def get_mixed_data(api_key, series_ids, start_date='2010-01-01'):
             st.error(f"FRED API Error: {e}")
             df_fred = pd.DataFrame()
 
-    # 2. 获取 Yahoo 数据 (DXY)
+    # 2. 获取 Yahoo 数据 (DXY / VIX / VXV)
     # DX-Y.NYB 是美元指数在 Yahoo 的代码
     df_yahoo = pd.DataFrame()
     try:
         # progress=False 隐藏下载进度条
-        yahoo_data = yf.download("DX-Y.NYB", start=start_date, progress=False)
-        
-        # 我们只需要 'Close' 或 'Adj Close'
+        tickers = ["DX-Y.NYB", "^VIX", "^VXV"]
+        yahoo_data = yf.download(tickers, start=start_date, progress=False)
+
+        # 只取 Close
         if not yahoo_data.empty:
-            if 'Close' in yahoo_data.columns:
-                dxy_series = yahoo_data['Close']
-                
-                if dxy_series.index.tz is not None:
-                    dxy_series.index = dxy_series.index.tz_localize(None)
-                
-                df_yahoo = pd.DataFrame(dxy_series)
-                df_yahoo.columns = ['DXY'] # 重命名为 DXY
+            if isinstance(yahoo_data.columns, pd.MultiIndex) and "Close" in yahoo_data.columns.levels[0]:
+                close_df = yahoo_data["Close"].copy()
+            elif "Close" in yahoo_data.columns:
+                close_df = yahoo_data[["Close"]].copy()
+            else:
+                close_df = pd.DataFrame()
+
+            if not close_df.empty:
+                if close_df.index.tz is not None:
+                    close_df.index = close_df.index.tz_localize(None)
+                col_map = {"DX-Y.NYB": "DXY", "^VIX": "VIX_YH", "^VXV": "VXV_YH"}
+                close_df = close_df.rename(columns=col_map)
+                df_yahoo = close_df
             else:
                 st.warning("Yahoo API 返回数据但不包含 Close 列")
     except Exception as e:
@@ -62,3 +68,4 @@ def get_mixed_data(api_key, series_ids, start_date='2010-01-01'):
 
     # 4. 填充缺失值 (ffill)
     return df_all.fillna(method='ffill').sort_index()
+
