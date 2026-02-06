@@ -28,6 +28,7 @@ SERIES_IDS = {
     'VIXCLS': 'VIXCLS',             
     'VXVCLS': 'VXVCLS',             
     'BAMLH0A0HYM2': 'BAMLH0A0HYM2', 
+    'BAA10Y': 'BAA10Y',
     
 }
 
@@ -299,5 +300,6 @@ CSS_STYLE = """
     }
 </style>
 """
+
 
 
