@@ -3,31 +3,43 @@ import pandas as pd
 import plotly.graph_objects as go
 
 def render_module_e(df_all):
-   
+    """
+    E模块: 外部冲击与汇率 (External Shocks & FX)
+    """
     # 1. 数据准备
     df = df_all.copy()
+    required_cols = ['DTWEXBGS', 'DXY', 'DEXJPUS', 'IRSTCI01JPM156N', 'DCOILWTICO', 'DHHNGSP']
+    if df.dropna(subset=required_cols).empty:
+        st.warning("E模块数据不足（外部汇率/能源），请稍后刷新。")
+        return
+
+    def prev_week_row(frame, days=7):
+        target = frame.index[-1] - pd.Timedelta(days=days)
+        idx = frame.index.get_indexer([target], method='nearest')[0]
+        return frame.iloc[idx]
     
     df['IRSTCI01JPM156N'] = df['IRSTCI01JPM156N'].fillna(method='ffill')
-        
-    df = df.fillna(method='ffill').dropna()
+    df = df.fillna(method='ffill')
+    df = df.dropna(subset=required_cols)
 
     # ==========================================
     # 2. 因子计算 
     # ==========================================
     
-    df['Chg_DXY'] = df['DXY'].pct_change(63)
-    df['Score_DXY'] = (1 - df['Chg_DXY'].rolling(1260, min_periods=1).rank(pct=True)) * 100
-
-    # 美元流动性 (Broad Dollar - FRED)
+    # 美元 (涨=坏)
     df['Chg_USD'] = df['DTWEXBGS'].pct_change(63) 
     df['Score_USD'] = (1 - df['Chg_USD'].rolling(1260, min_periods=1).rank(pct=True)) * 100
 
-   
+    df['Chg_DXY'] = df['DXY'].pct_change(63)
+    df['Score_DXY'] = (1 - df['Chg_DXY'].rolling(1260, min_periods=1).rank(pct=True)) * 100
+    
+
     # 日元 (USD/JPY 跌 = 坏)
     df['Yen_Appreciation'] = -1 * df['DEXJPUS'].pct_change(63)
     df['Score_Yen_FX'] = (1 - df['Yen_Appreciation'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     
-    # BoJ 利率 (高=坏)
+    # 无抵押隔夜拆借利率 (高=坏)
+
     df['Score_BoJ_Rate'] = (1 - df['IRSTCI01JPM156N'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     df['Score_Yen_Total'] = df['Score_Yen_FX'] * 0.7 + df['Score_BoJ_Rate'] * 0.3
 
@@ -47,11 +59,11 @@ def render_module_e(df_all):
         df['Score_Energy'] * 0.3
     )
 
-       # 4. 展示
+    # 4. 展示
     df_view = df[df.index >= '2020-01-01'].copy()
     
     latest = df.iloc[-1]
-    prev_week = df.iloc[-8]
+    prev_week = prev_week_row(df)
 
     c1, c2, c3, c4 = st.columns(4)
     
@@ -64,7 +76,7 @@ def render_module_e(df_all):
         </div>
     """, unsafe_allow_html=True)
 
-    c2.metric("DXY Index ", f"{latest['DXY']:.2f}", 
+    c2.metric("DXY Index (Yahoo)", f"{latest['DXY']:.2f}", 
                   f"{(latest['DXY'] - prev_week['DXY']):.2f}(vs上周)", delta_color="inverse")
     c3.metric("日本无抵押隔夜拆借利率", f"{latest['IRSTCI01JPM156N']:.3f}%", f"{(latest['IRSTCI01JPM156N'] - prev_week['IRSTCI01JPM156N']):.3f}% (vs上周)", delta_color="inverse")
     c4.metric("WTI 原油", f"${latest['DCOILWTICO']:.1f}", f"{(latest['DCOILWTICO'] - prev_week['DCOILWTICO']):.1f} (vs上周)", delta_color="inverse")
@@ -76,7 +88,7 @@ def render_module_e(df_all):
         col = "#09ab3b" if val > 50 else "#ff2b2b"
         return f"""<div class="sub-card"><div class="sub-label">{label}</div><div class="sub-value" style="color:{col}">{val:.1f}</div></div>"""
     s1.markdown(sub_card("美元流动性 (20%)", latest['Score_USD']), unsafe_allow_html=True)
-    s2.markdown(sub_card("DXY (20%)", latest['Score_DXY']), unsafe_allow_html=True) 
+    s2.markdown(sub_card("DXY Index (Yahoo) (20%)", latest['Score_DXY']), unsafe_allow_html=True) 
     s3.markdown(sub_card("日元套息压力 (30%)", latest['Score_Yen_Total']), unsafe_allow_html=True)      
     s4.markdown(sub_card("能源成本压力 (30%)", latest['Score_Energy']), unsafe_allow_html=True)
 
@@ -92,8 +104,8 @@ def render_module_e(df_all):
     
     with col2:
         fig_usd = go.Figure()
-        if 'DTWEXAFEGS' in df_view.columns:
-            fig_usd.add_trace(go.Scatter(x=df_view.index, y=df_view['DXY'], name='DXY Index', line=dict(color='#2ca02c', width=2)))
+        if 'DXY' in df_view.columns:
+            fig_usd.add_trace(go.Scatter(x=df_view.index, y=df_view['DXY'], name='DXY (Yahoo)', line=dict(color='#2ca02c', width=2)))
         fig_usd.add_trace(go.Scatter(x=df_view.index, y=df_view['DTWEXBGS'], name='Broad USD', line=dict(color='#888', width=2, dash='dot'), yaxis='y2'))
         
         fig_usd.update_layout(height=350, title="美元指数", 
@@ -163,7 +175,7 @@ def render_module_e(df_all):
         <div class="glossary-box">
             <div class="glossary-title">因子 3：美元指数 (The Dollar)</div>
             <div class="glossary-content">
-                <b>1. DXY (金融属性)：</b> 以欧元、日元为主。<br>
+                <b>1. DXY Major (金融属性)：</b> 以欧元、日元为主。<br>
                 <span class="glossary-label">逻辑：</span> 主要影响发达国家市场和金融衍生品。DXY 飙升通常代表全球金融体系在“去杠杆”，是避险模式 (Risk-Off) 的特征。<br><br>
                 <b>2. Broad Dollar (贸易属性)：</b> 包含人民币、比索等主要贸易伙伴货币。<br>
                 <span class="glossary-label">逻辑：</span> 主要影响实体经济和新兴市场。该指数走强，意味着全球贸易融资成本变贵，新兴市场偿债压力剧增，易引发债务违约危机。
