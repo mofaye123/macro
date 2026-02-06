@@ -15,7 +15,12 @@ def render_module_b(df_raw):
     1. 政策制度 (40%): 利率趋势 + 绝对水平判别
     2. 摩擦压力 (60%): 天花板/地板/分裂 + SRF预警
     """
-    df = df_raw.copy().dropna()
+    df = df_raw.copy()
+    required_cols = ['SOFR', 'IORB', 'RRPONTSYAWARD', 'TGCRRATE', 'RPONTSYD']
+    if df.dropna(subset=required_cols).empty:
+        st.warning("B模块数据不足（SOFR/IORB/RRP/TGCR/SRF），请稍后刷新。")
+        return
+    df = df.dropna(subset=required_cols)
 
     def prev_week_row(frame, days=7):
         target = frame.index[-1] - pd.Timedelta(days=days)
