@@ -322,6 +322,44 @@ def render_dashboard_standalone(df_all):
     score_c = df_c['Total_Score'].iloc[-1]
     score_d = df_d['Total_Score'].iloc[-1]
     score_e = df_e['Total_Score'].iloc[-1]
+
+    # 模块 F: 信用压力
+    df_f = df_all.copy().dropna()
+    def rolling_percentile_f(series, window=756, min_periods=30):
+        return series.rolling(window, min_periods=min_periods).apply(
+            lambda s: s.rank(pct=True).iloc[-1],
+            raw=False
+        ) * 100
+    def bounded_score(series):
+        return series.clip(lower=0, upper=100)
+    df_f['HY_Spread'] = df_f['BAMLH0A0HYM2']
+    df_f['BAA10Y'] = df_f['BAA10Y']
+    df_f['Score_HY_Level'] = 100 - rolling_percentile_f(df_f['HY_Spread'])
+    df_f['Score_HY_Trend'] = rolling_percentile_f(-df_f['HY_Spread'].diff(13))
+    df_f['Score_BAA_Level'] = 100 - rolling_percentile_f(df_f['BAA10Y'])
+    df_f['Total_Score'] = bounded_score(
+        df_f['Score_HY_Level'] * 0.5 +
+        df_f['Score_HY_Trend'] * 0.3 +
+        df_f['Score_BAA_Level'] * 0.2
+    )
+
+    # 模块 G: 风险偏好
+    df_g = df_all.copy().dropna()
+    df_g['VIX'] = df_g['VIXCLS']
+    df_g['VXV'] = df_g['VXVCLS']
+    df_g['VIX_VXV'] = df_g['VIX'] / df_g['VXV']
+    df_g['SPX'] = df_g['SP500']
+    df_g['Score_VIX'] = bounded_score(100 - rolling_percentile_f(df_g['VIX']))
+    df_g['Score_Term'] = bounded_score(100 - rolling_percentile_f(df_g['VIX_VXV']))
+    df_g['Score_Mom'] = bounded_score(rolling_percentile_f(df_g['SPX'].diff(65)))
+    df_g['Total_Score'] = bounded_score(
+        df_g['Score_Term'] * 0.4 +
+        df_g['Score_VIX'] * 0.3 +
+        df_g['Score_Mom'] * 0.3
+    )
+
+    score_f = df_f['Total_Score'].iloc[-1]
+    score_g = df_g['Total_Score'].iloc[-1]
     
     # 变动 (WoW/MoM 根据原逻辑)
     chg_a = score_a - df_a['Total_Score'].iloc[-2] # A为周频，直接取上周
@@ -329,14 +367,21 @@ def render_dashboard_standalone(df_all):
     chg_c = score_c - prev_week_value(df_c['Total_Score'])
     chg_d = score_d - prev_week_value(df_d['Total_Score'])
     chg_e = score_e - prev_week_value(df_e['Total_Score'])
+    chg_f = score_f - prev_week_value(df_f['Total_Score'])
+    chg_g = score_g - prev_week_value(df_g['Total_Score'])
     
-    total_score = score_a*0.25 + score_b*0.25 + score_c*0.15 + score_d*0.15+score_e*0.20
+    total_score = (
+        score_a*0.20 + score_b*0.20 + score_c*0.15 + score_d*0.15 + score_e*0.15 +
+        score_f*0.075 + score_g*0.075
+    )
     prev_total = (
-        df_a['Total_Score'].iloc[-2]*0.25 +
-        prev_week_value(df_b['Total_Score'])*0.25 +
+        df_a['Total_Score'].iloc[-2]*0.20 +
+        prev_week_value(df_b['Total_Score'])*0.20 +
         prev_week_value(df_c['Total_Score'])*0.15 +
         prev_week_value(df_d['Total_Score'])*0.15 +
-        prev_week_value(df_e['Total_Score'])*0.20
+        prev_week_value(df_e['Total_Score'])*0.15 +
+        prev_week_value(df_f['Total_Score'])*0.075 +
+        prev_week_value(df_g['Total_Score'])*0.075
     )
     total_chg = total_score - prev_total
 
@@ -410,7 +455,7 @@ def render_dashboard_standalone(df_all):
         lookback_years = st.slider("⏱️ 观察窗口 (年)", 1, 10, 5)
         idx = df_b.index
         s_a_hist = df_a['Total_Score'].reindex(idx, method='ffill')
-        s_total_hist = (s_a_hist*0.25 + df_b['Total_Score']*0.25 + df_c['Total_Score']*0.15 + df_d['Total_Score']*0.15 + df_e['Total_Score']*0.20).dropna()
+        s_total_hist = (s_a_hist*0.20 + df_b['Total_Score']*0.20 + df_c['Total_Score']*0.15 + df_d['Total_Score']*0.15 + df_e['Total_Score']*0.15 + df_f['Total_Score']*0.075 + df_g['Total_Score']*0.075).dropna()
         trading_days = lookback_years * 252
         recent_trend = s_total_hist.tail(trading_days)
 
@@ -423,6 +468,8 @@ def render_dashboard_standalone(df_all):
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_c['Total_Score'].loc[recent_trend.index], name='C.国债', line=dict(color='#f59e0b', width=1, dash='dot'), visible='legendonly'))
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_d['Total_Score'].loc[recent_trend.index], name='D.利率', line=dict(color='#ec4899', width=1, dash='dot'), visible='legendonly'))
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_e['Total_Score'].loc[recent_trend.index], name='E.外部', line=dict(color='#10b981', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_f['Total_Score'].loc[recent_trend.index], name='F.信用', line=dict(color='#ef4444', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_g['Total_Score'].loc[recent_trend.index], name='G.风险偏好', line=dict(color='#0ea5e9', width=1, dash='dot'), visible='legendonly'))
         
         
         fig_trend.update_layout(
@@ -474,13 +521,23 @@ def render_dashboard_standalone(df_all):
     desc_c = f"长端动量惩罚 ({df_c['Penalty_Factor'].iloc[-1]}x)" if df_c['Penalty_Factor'].iloc[-1] < 1.0 else ("深度倒挂 >50bps" if df_all['T10Y2Y'].iloc[-1] < -0.5 else "期限结构健康")
     desc_d = f"通胀预期 {df_all['T10YIE'].iloc[-1]:.2f}%"
     desc_e = "美元指数强势压制" if df_e['Chg_DXY'].iloc[-1] > 0.02 else "外部汇率环境相对宽松"
+    hy_now = df_f['HY_Spread'].iloc[-1]
+    baa_now = df_f['BAA10Y'].iloc[-1]
+    desc_f = "信用压力偏紧" if (hy_now > 6.0 or baa_now > 3.0) else ("信用压力回升" if score_f > 55 else "信用压力中性")
+    vix_now = df_g['VIX'].iloc[-1]
+    term_now = df_g['VIX_VXV'].iloc[-1]
+    desc_g = "风险偏好收缩" if (vix_now > 25 or term_now > 1.0 or score_g < 40) else ("风险偏好回暖" if score_g > 55 else "风险偏好中性")
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: st.markdown(create_card_html("A", "系统流动性", "Liquidity", score_a, chg_a, "25%", desc_a, link="?nav=module_a"), unsafe_allow_html=True)
-    with c2: st.markdown(create_card_html("B", "资金价格", "Funding", score_b, chg_b, "25%", desc_b, link="?nav=module_b"), unsafe_allow_html=True)
+    with c1: st.markdown(create_card_html("A", "系统流动性", "Liquidity", score_a, chg_a, "20%", desc_a, link="?nav=module_a"), unsafe_allow_html=True)
+    with c2: st.markdown(create_card_html("B", "资金价格", "Funding", score_b, chg_b, "20%", desc_b, link="?nav=module_b"), unsafe_allow_html=True)
     with c3: st.markdown(create_card_html("C", "国债结构", "Yield Curve", score_c, chg_c, "15%", desc_c, link="?nav=module_c"), unsafe_allow_html=True)
     with c4: st.markdown(create_card_html("D", "实际利率", "Real Rates", score_d, chg_d, "15%", desc_d, link="?nav=module_d"), unsafe_allow_html=True)
-    with c5: st.markdown(create_card_html("E", "外部冲击", "External", score_e, chg_e, "20%", desc_e, link="?nav=module_e"), unsafe_allow_html=True)
+    with c5: st.markdown(create_card_html("E", "外部冲击", "External", score_e, chg_e, "15%", desc_e, link="?nav=module_e"), unsafe_allow_html=True)
+
+    c6, c7, c8, c9, c10 = st.columns(5)
+    with c6: st.markdown(create_card_html("F", "信用压力", "Credit", score_f, chg_f, "7.5%", desc_f, link="?nav=module_f"), unsafe_allow_html=True)
+    with c7: st.markdown(create_card_html("G", "风险偏好", "Risk", score_g, chg_g, "7.5%", desc_g, link="?nav=module_g"), unsafe_allow_html=True)
     # --------------------------------------------------------
     # 5. 参考图表 (TGA/SOFR联动 & 真理检验)
     # --------------------------------------------------------
@@ -580,32 +637,43 @@ def render_dashboard_standalone(df_all):
     tga_val_check = tga_curr / 1000 if tga_curr > 10000 else tga_curr
     if tga_val_check >= 800:
         p_val, p_level = ("0.5x", "🔴") if tga_val_check >= 900 else (("0.6x", "🟠") if tga_val_check >= 850 else ("0.8x", "🟡"))
-        risk_factors.append(f"{p_level} **A模块 (TGA惩罚)**: TGA 余额高达 {tga_val_check:.1f}B，触发系数 **{p_val}**，流动性剧烈抽水。")
+        risk_factors.append(f"{p_level} A模块 (TGA惩罚): 流动性抽水加剧，惩罚系数 {p_val}。")
     
     if score_a < 40:
-        risk_factors.append(f"🔴 **A模块 (流动性)**: 得分过低 ({score_a:.1f})，显示 Fed 净流动性枯竭。")
+        risk_factors.append(f"🔴 A模块 (流动性): 整体流动性偏紧，得分 {score_a:.1f}。")
     
     if df_all['RPONTSYD'].iloc[-1] > 10:
-        risk_factors.append(f"🔴 **B模块 (资金面)**: 触发 **SRF 动态惩罚**。急救室用量 > 100亿。")
+        risk_factors.append("🔴 B模块 (资金面): 应急融资启动，资金压力显著上升。")
     elif df_all['SOFR'].iloc[-1] > df_all['IORB'].iloc[-1]:
-        risk_factors.append(f"🟠 **B模块 (资金面)**: SOFR 突破天花板 (IORB)，银行间资金紧张。")
+        risk_factors.append("🟠 B模块 (资金面): 资金价格偏贵，融资条件趋紧。")
     
     if df_c['Penalty_Factor'].iloc[-1] < 1.0:
-        risk_factors.append(f"🔴 **C模块 (国债)**: 触发长端利率暴涨惩罚，系数 **{df_c['Penalty_Factor'].iloc[-1]:.1f}x**。")
+        risk_factors.append(f"🔴 C模块 (国债): 长端利率急涨，估值压力加剧。")
     elif df_all['T10Y2Y'].iloc[-1] < -0.5:
-         risk_factors.append(f"🟠 **C模块 (国债)**: 收益率曲线深度倒挂 (>50bps)。")
+         risk_factors.append("🟠 C模块 (国债): 曲线深度倒挂，衰退信号增强。")
 
     if df_all['DFII10'].iloc[-1] > 2.0:
-        risk_factors.append(f"🟠 **D模块 (实利)**: 10Y 实际利率 > 2.0%，极度限制性区域。")
+        risk_factors.append("🟠 D模块 (实利): 实际利率偏高，融资环境偏紧。")
 
     try:
         if df_all['DEXJPUS'].pct_change(5).iloc[-1] < -0.03: 
-            risk_factors.append(f"🔴 **E模块 (汇率)**: 检测到 **日元套息平仓风险** (5日暴跌 >3%)。")
+            risk_factors.append("🔴 E模块 (汇率): 套息交易退潮风险上升。")
     except: pass
 
     try:
         if df_all['DCOILWTICO'].pct_change(20).iloc[-1] > 0.15: 
-            risk_factors.append(f"🟠 **E模块 (能源)**: 油价短期飙升 (>15%)，通胀风险增加。")
+            risk_factors.append("🟠 E模块 (能源): 能源价格上行，通胀压力抬头。")
+    except: pass
+
+    # F/G 风险雷达补充
+    try:
+        if score_f < 40 or df_f['HY_Spread'].iloc[-1] > 6.0 or df_f['BAA10Y'].iloc[-1] > 3.0:
+            risk_factors.append("🔴 F模块 (信用): 信用压力升温，融资条件收紧。")
+    except: pass
+
+    try:
+        if score_g < 40 or df_g['VIX'].iloc[-1] > 25 or df_g['VIX_VXV'].iloc[-1] > 1.0:
+            risk_factors.append("🔴 G模块 (风险偏好): 风险厌恶升温，情绪转弱。")
     except: pass
 
     # 渲染雷达结果 (同样使用紧凑 HTML)
@@ -643,6 +711,8 @@ def render_dashboard_standalone(df_all):
             3. 国债 (Module C): 得分 {score_c:.1f} | 10Y-2Y: {df_all['T10Y2Y'].iloc[-1]} bps
             4. 实利 (Module D): 得分 {score_d:.1f} | 10Y实际利率: {df_all['DFII10'].iloc[-1]}%
             5. 外部 (Module E): 得分 {score_e:.1f} | DXY变动: {df_e['Chg_DXY'].iloc[-1]:.2%}
+            6. 信用压力 (Module F): 得分 {score_f:.1f} | HY Spread: {df_f['HY_Spread'].iloc[-1]:.2f}% | BAA-10Y: {df_f['BAA10Y'].iloc[-1]:.2f}%
+            7. 风险偏好 (Module G): 得分 {score_g:.1f} | VIX: {df_g['VIX'].iloc[-1]:.1f} | VIX/VXV: {df_g['VIX_VXV'].iloc[-1]:.2f}
             """
             
             prompt = f"""
@@ -650,7 +720,7 @@ def render_dashboard_standalone(df_all):
             {context}
             要求：
             1. 核心观点 (The One Thing)：一句话定义当前宏观环境。
-            2. 风险雷达：指出最危险的1-2个因子。
+            2. 风险雷达：指出最危险的1-3个因子。
             3. 资产配置建议：对美债、美股、黄金、BTC给出建议。
             4. 风格：专业、犀利、数据驱动。
             """
@@ -684,7 +754,7 @@ def render_dashboard_standalone(df_all):
             <div class="glossary-content">
                 本模型并非简单的加权平均，而是旨在模拟宏观环境的脆弱性。核心逻辑在于识别各个模块因子风险。<br><br>
                 <b>1. 常态环境 (Normal Regime)：</b><br>
-                当市场平稳时，A/B/C/D/E 按照 25/25/15/15/20 的权重线性叠加，反映整体水位。<br><br>
+                当市场平稳时，A/B/C/D/E/F/G 按照 <b>20/20/15/15/15/7.5/7.5</b> 权重线性叠加，反映整体水位。<br><br>
                 <b>2. 动态惩罚 - 坏的时候权重增大：</b><br>
                 宏观环境危机往往由单一因子做为导火索从而引发更大规模的危机。为了捕捉这种非线性风险，模型内置了动态调控惩罚机制：
                 <br>
