@@ -211,8 +211,11 @@ def render_dashboard_standalone(df_all):
         df_a['Score_Reserves'] * 0.1
     ) * df_a['TGA_Penalty_Total']
 
+    def ensure_df(df, cols):
+        return df.dropna(subset=cols).copy()
+
     # 模块 B
-    df_b = df_all.copy().dropna() 
+    df_b = ensure_df(df_all, ['SOFR', 'IORB', 'RRPONTSYAWARD', 'TGCRRATE', 'RPONTSYD'])
     df_b['SOFR_MA13'] = df_b['SOFR'].rolling(65, min_periods=1).mean()
     df_b['SOFR_Trend'] = df_b['SOFR_MA13'].diff(21)
     df_b['Score_Trend'] = df_b['SOFR_Trend'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
@@ -265,7 +268,7 @@ def render_dashboard_standalone(df_all):
     df_b['Total_Score'] = df_b['Score_Policy'] * 0.40 + df_b['Score_Friction'] * 0.60
 
     # 模块 C
-    df_c = df_all.copy().dropna()
+    df_c = ensure_df(df_all, ['DGS10', 'DGS2', 'DGS30', 'T10Y2Y', 'T10Y3M'])
     def get_level_score(series): return series.rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
     df_c['Score_10Y'] = get_level_score(df_c['DGS10'])
     df_c['Score_2Y'] = get_level_score(df_c['DGS2'])
@@ -289,16 +292,15 @@ def render_dashboard_standalone(df_all):
     df_c['Total_Score'] = df_c['Total_Score1'] * df_c['Penalty_Factor']
 
     # 模块 D
-    df_d = df_all.copy().dropna()
+    df_d = ensure_df(df_all, ['DFII10', 'DFII5', 'T10YIE'])
     df_d['Score_Real_10Y'] = df_d['DFII10'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
     df_d['Score_Real_5Y'] = df_d['DFII5'].rolling(1260, min_periods=1).rank(pct=True, ascending=False) * 100
     df_d['Score_Breakeven'] = get_slope_score(df_d['T10YIE'], 2.1, 0.6) 
     df_d['Total_Score'] = (df_d['Score_Real_10Y']*0.4 + df_d['Score_Real_5Y']*0.3 + df_d['Score_Breakeven']*0.3)
 
     # 模块 E
-    df_e = df_all.copy()
-    if 'IRSTCI01JPM156N' in df_e.columns: df_e['IRSTCI01JPM156N'] = df_e['IRSTCI01JPM156N'].fillna(method='ffill')
-    df_e = df_e.fillna(method='ffill').dropna()
+    df_e = df_all.copy().fillna(method='ffill')
+    df_e = ensure_df(df_e, ['DTWEXBGS', 'DXY', 'DEXJPUS', 'IRSTCI01JPM156N', 'DCOILWTICO', 'DHHNGSP'])
     df_e['Chg_USD'] = df_e['DTWEXBGS'].pct_change(63)
     df_e['Score_USD'] = (1 - df_e['Chg_USD'].rolling(1260, min_periods=1).rank(pct=True)) * 100
     df_e['Chg_DXY'] = df_e['DXY'].pct_change(63)
@@ -324,7 +326,7 @@ def render_dashboard_standalone(df_all):
     score_e = df_e['Total_Score'].iloc[-1]
 
     # 模块 F: 信用压力
-    df_f = df_all.copy().dropna()
+    df_f = ensure_df(df_all, ['BAMLH0A0HYM2', 'BAA10Y'])
     def rolling_percentile_f(series, window=756, min_periods=30):
         return series.rolling(window, min_periods=min_periods).apply(
             lambda s: s.rank(pct=True).iloc[-1],
@@ -344,22 +346,43 @@ def render_dashboard_standalone(df_all):
     )
 
     # 模块 G: 风险偏好
-    df_g = df_all.copy().dropna()
-    df_g['VIX'] = df_g['VIXCLS']
-    df_g['VXV'] = df_g['VXVCLS']
-    df_g['VIX_VXV'] = df_g['VIX'] / df_g['VXV']
-    df_g['SPX'] = df_g['SP500']
-    df_g['Score_VIX'] = bounded_score(100 - rolling_percentile_f(df_g['VIX']))
-    df_g['Score_Term'] = bounded_score(100 - rolling_percentile_f(df_g['VIX_VXV']))
-    df_g['Score_Mom'] = bounded_score(rolling_percentile_f(df_g['SPX'].diff(65)))
-    df_g['Total_Score'] = bounded_score(
-        df_g['Score_Term'] * 0.4 +
-        df_g['Score_VIX'] * 0.3 +
-        df_g['Score_Mom'] * 0.3
-    )
+    vix_yh = df_all['VIX_YH'] if 'VIX_YH' in df_all.columns else None
+    vix_fd = df_all['VIXCLS'] if 'VIXCLS' in df_all.columns else None
+    vxv_yh = df_all['VXV_YH'] if 'VXV_YH' in df_all.columns else None
+    vxv_fd = df_all['VXVCLS'] if 'VXVCLS' in df_all.columns else None
+    df_g = df_all.copy()
+    df_g['VIX'] = vix_yh.combine_first(vix_fd) if vix_yh is not None else vix_fd
+    df_g['VXV'] = vxv_yh.combine_first(vxv_fd) if vxv_yh is not None else vxv_fd
+    if df_g['VIX'] is None or df_g['VXV'] is None or 'SP500' not in df_g.columns:
+        df_g = pd.DataFrame()
+    else:
+        df_g = ensure_df(df_g, ['SP500', 'VIX', 'VXV'])
+    if not df_g.empty:
+        df_g['VIX_VXV'] = df_g['VIX'] / df_g['VXV']
+        df_g['SPX'] = df_g['SP500']
+        df_g = df_g.dropna(subset=['VIX', 'VXV', 'SPX'])
+        if not df_g.empty:
+            df_g['Score_VIX'] = bounded_score(100 - rolling_percentile_f(df_g['VIX']))
+            df_g['Score_Term'] = bounded_score(100 - rolling_percentile_f(df_g['VIX_VXV']))
+            df_g['Score_Mom'] = bounded_score(rolling_percentile_f(df_g['SPX'].diff(65)))
+            df_g['Total_Score'] = bounded_score(
+                df_g['Score_Term'] * 0.4 +
+                df_g['Score_VIX'] * 0.3 +
+                df_g['Score_Mom'] * 0.3
+            )
 
-    score_f = df_f['Total_Score'].iloc[-1]
-    score_g = df_g['Total_Score'].iloc[-1]
+    def safe_last(series, fallback=50.0):
+        try:
+            val = series.iloc[-1]
+            return fallback if pd.isna(val) else float(val)
+        except Exception:
+            return fallback
+
+    score_f = safe_last(df_f['Total_Score']) if not df_f.empty else 50.0
+    if not df_g.empty and 'Total_Score' in df_g.columns and df_g['Total_Score'].dropna().shape[0] > 0:
+        score_g = float(df_g['Total_Score'].dropna().iloc[-1])
+    else:
+        score_g = 50.0
     
     # 变动 (WoW/MoM 根据原逻辑)
     chg_a = score_a - df_a['Total_Score'].iloc[-2] # A为周频，直接取上周
@@ -367,8 +390,12 @@ def render_dashboard_standalone(df_all):
     chg_c = score_c - prev_week_value(df_c['Total_Score'])
     chg_d = score_d - prev_week_value(df_d['Total_Score'])
     chg_e = score_e - prev_week_value(df_e['Total_Score'])
-    chg_f = score_f - prev_week_value(df_f['Total_Score'])
-    chg_g = score_g - prev_week_value(df_g['Total_Score'])
+    chg_f = score_f - (prev_week_value(df_f['Total_Score']) if not df_f.empty else score_f)
+    if df_g.empty:
+        chg_g = 0.0
+    else:
+        prev_g = prev_week_value(df_g['Total_Score'])
+        chg_g = score_g - (prev_g if not pd.isna(prev_g) else score_g)
     
     total_score = (
         score_a*0.20 + score_b*0.20 + score_c*0.15 + score_d*0.15 + score_e*0.15 +
@@ -380,8 +407,8 @@ def render_dashboard_standalone(df_all):
         prev_week_value(df_c['Total_Score'])*0.15 +
         prev_week_value(df_d['Total_Score'])*0.15 +
         prev_week_value(df_e['Total_Score'])*0.15 +
-        prev_week_value(df_f['Total_Score'])*0.075 +
-        prev_week_value(df_g['Total_Score'])*0.075
+        (prev_week_value(df_f['Total_Score']) if not df_f.empty else 50.0)*0.075 +
+        (prev_week_value(df_g['Total_Score']) if not df_g.empty else 50.0)*0.075
     )
     total_chg = total_score - prev_total
 
@@ -455,7 +482,20 @@ def render_dashboard_standalone(df_all):
         lookback_years = st.slider("⏱️ 观察窗口 (年)", 1, 10, 5)
         idx = df_b.index
         s_a_hist = df_a['Total_Score'].reindex(idx, method='ffill')
-        s_total_hist = (s_a_hist*0.20 + df_b['Total_Score']*0.20 + df_c['Total_Score']*0.15 + df_d['Total_Score']*0.15 + df_e['Total_Score']*0.15 + df_f['Total_Score']*0.075 + df_g['Total_Score']*0.075).dropna()
+        def safe_series(frame, col, fallback=50.0):
+            if frame is None or frame.empty or col not in frame.columns:
+                return pd.Series(fallback, index=idx)
+            return frame[col].reindex(idx, method='ffill').fillna(fallback)
+
+        s_total_hist = (
+            s_a_hist*0.20 +
+            safe_series(df_b, 'Total_Score')*0.20 +
+            safe_series(df_c, 'Total_Score')*0.15 +
+            safe_series(df_d, 'Total_Score')*0.15 +
+            safe_series(df_e, 'Total_Score')*0.15 +
+            safe_series(df_f, 'Total_Score')*0.075 +
+            safe_series(df_g, 'Total_Score')*0.075
+        ).dropna()
         trading_days = lookback_years * 252
         recent_trend = s_total_hist.tail(trading_days)
 
@@ -464,12 +504,12 @@ def render_dashboard_standalone(df_all):
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=recent_trend.values, name='综合得分', mode='lines', line=dict(color='#2563eb', width=2), fill='tozeroy', fillcolor='rgba(37, 99, 235, 0.05)'))
         # 辅线：淡灰/淡彩
         fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=s_a_hist.loc[recent_trend.index], name='A.流动性', line=dict(color='#06b6d4', width=1, dash='dot'), visible='legendonly'))
-        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_b['Total_Score'].loc[recent_trend.index], name='B.资金面', line=dict(color='#8b5cf6', width=1, dash='dot'), visible='legendonly'))
-        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_c['Total_Score'].loc[recent_trend.index], name='C.国债', line=dict(color='#f59e0b', width=1, dash='dot'), visible='legendonly'))
-        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_d['Total_Score'].loc[recent_trend.index], name='D.利率', line=dict(color='#ec4899', width=1, dash='dot'), visible='legendonly'))
-        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_e['Total_Score'].loc[recent_trend.index], name='E.外部', line=dict(color='#10b981', width=1, dash='dot'), visible='legendonly'))
-        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_f['Total_Score'].loc[recent_trend.index], name='F.信用', line=dict(color='#ef4444', width=1, dash='dot'), visible='legendonly'))
-        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=df_g['Total_Score'].loc[recent_trend.index], name='G.风险偏好', line=dict(color='#0ea5e9', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=safe_series(df_b, 'Total_Score').loc[recent_trend.index], name='B.资金面', line=dict(color='#8b5cf6', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=safe_series(df_c, 'Total_Score').loc[recent_trend.index], name='C.国债', line=dict(color='#f59e0b', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=safe_series(df_d, 'Total_Score').loc[recent_trend.index], name='D.利率', line=dict(color='#ec4899', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=safe_series(df_e, 'Total_Score').loc[recent_trend.index], name='E.外部', line=dict(color='#10b981', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=safe_series(df_f, 'Total_Score').loc[recent_trend.index], name='F.信用', line=dict(color='#ef4444', width=1, dash='dot'), visible='legendonly'))
+        fig_trend.add_trace(go.Scatter(x=recent_trend.index, y=safe_series(df_g, 'Total_Score').loc[recent_trend.index], name='G.风险偏好', line=dict(color='#0ea5e9', width=1, dash='dot'), visible='legendonly'))
         
         
         fig_trend.update_layout(
@@ -524,9 +564,14 @@ def render_dashboard_standalone(df_all):
     hy_now = df_f['HY_Spread'].iloc[-1]
     baa_now = df_f['BAA10Y'].iloc[-1]
     desc_f = "信用压力偏紧" if (hy_now > 6.0 or baa_now > 3.0) else ("信用压力回升" if score_f > 55 else "信用压力中性")
-    vix_now = df_g['VIX'].iloc[-1]
-    term_now = df_g['VIX_VXV'].iloc[-1]
-    desc_g = "风险偏好收缩" if (vix_now > 25 or term_now > 1.0 or score_g < 40) else ("风险偏好回暖" if score_g > 55 else "风险偏好中性")
+    if df_g.empty or 'VIX' not in df_g.columns or 'VIX_VXV' not in df_g.columns:
+        desc_g = "风险偏好中性"
+        vix_now = 0.0
+        term_now = 1.0
+    else:
+        vix_now = float(df_g['VIX'].dropna().iloc[-1]) if df_g['VIX'].dropna().shape[0] else 0.0
+        term_now = float(df_g['VIX_VXV'].dropna().iloc[-1]) if df_g['VIX_VXV'].dropna().shape[0] else 1.0
+        desc_g = "风险偏好收缩" if (vix_now > 25 or term_now > 1.0 or score_g < 40) else ("风险偏好回暖" if score_g > 55 else "风险偏好中性")
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1: st.markdown(create_card_html("A", "系统流动性", "Liquidity", score_a, chg_a, "20%", desc_a, link="?nav=module_a"), unsafe_allow_html=True)
