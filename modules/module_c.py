@@ -14,7 +14,17 @@ def render_module_c(df_raw):
     1. 绝对利率 (Level): 低 = 松 (Risk-On) | 高 = 紧
     2. 期限利差 (Slope): MID_BEST 逻辑 (适度正斜率最好，倒挂或过陡都扣分)
     """
-    df = df_raw.copy().dropna()
+    df = df_raw.copy()
+    required_cols = ['DGS10', 'DGS2', 'DGS30', 'T10Y2Y', 'T10Y3M']
+    if df.dropna(subset=required_cols).empty:
+        st.warning("C模块数据不足（国债利率/期限结构），请稍后刷新。")
+        return
+    df = df.dropna(subset=required_cols)
+
+    def prev_week_row(frame, days=7):
+        target = frame.index[-1] - pd.Timedelta(days=days)
+        idx = frame.index.get_indexer([target], method='nearest')[0]
+        return frame.iloc[idx]
 
     # --- 1. 因子计算 ---
     # 1.1 绝对利率得分 (越低越好 -> 宽松)
@@ -28,7 +38,6 @@ def render_module_c(df_raw):
 
     # 1.2 曲线斜率得分 (MID_BEST 逻辑)
     # 目标: 50bps (0.5%), 容忍带: +/- 150bps
-    # 逻辑: 距离目标越近分越高，倒挂(负值)或过陡(>2%)都低分
     def get_slope_score(series, target=0.5, tolerance=1.5):
         # 计算距离目标的绝对偏差
         deviation = (series - target).abs()
@@ -72,7 +81,7 @@ def render_module_c(df_raw):
     # --- 3. 页面展示 ---
     latest = df.iloc[-1]
     prev = df.iloc[-2]
-    prev_week = df.iloc[-8]
+    prev_week = prev_week_row(df)
     pf = latest['Penalty_Factor']
     ms = latest['Max_Slope']
 
