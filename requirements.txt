@@ -5,3 +5,4 @@ fredapi
 plotly
 yfinance
 google-genai
+reportlab==4.2.5
