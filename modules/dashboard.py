@@ -1030,6 +1030,6 @@ def render_dashboard_standalone(df_all):
 
     # 底部版权
     st.markdown(
-        """<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V2.5 // INTERNAL USE ONLY // POWERED BY STREAMLIT & PLOTLY</div>""",
+        """<div style="text-align:center; color:#475569; font-size:10px; font-family:monospace; margin-top:40px; border-top:1px solid rgba(255,255,255,0.05); padding-top:20px;">QUANT_MODEL_V1.2 // INTERNAL USE ONLY // POWERED BY STREAMLIT & GEMINI</div>""",
         unsafe_allow_html=True,
     )
