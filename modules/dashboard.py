@@ -2,6 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import math
+import json
+import io
+import re
+import html
+import textwrap
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from config import GEMINI_API_KEY
@@ -739,35 +744,240 @@ def render_dashboard_standalone(df_all):
     if 'ai_report' not in st.session_state:
         st.session_state.ai_report = None
 
-    col_left, col_right = st.columns([0.3, 0.7])
+    def clean_text_for_pdf(raw_text: str) -> str:
+        if not raw_text:
+            return ""
+        txt = html.unescape(raw_text)
+        txt = re.sub(r"<[^>]+>", "", txt)
+        txt = txt.replace("\r\n", "\n")
+        return txt
+
+    def build_pdf_bytes(text: str, title: str = "AI宏观分析报告") -> bytes:
+        try:
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import A4
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+            pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+            buffer = io.BytesIO()
+            c = canvas.Canvas(buffer, pagesize=A4)
+            width, height = A4
+            c.setFont("STSong-Light", 16)
+            c.drawString(50, height - 50, title)
+            c.setFont("STSong-Light", 10)
+            y = height - 80
+            for line in text.split("\n"):
+                wrapped = textwrap.wrap(line, width=90) or [""]
+                for wline in wrapped:
+                    if y < 50:
+                        c.showPage()
+                        c.setFont("STSong-Light", 10)
+                        y = height - 50
+                    c.drawString(50, y, wline)
+                    y -= 14
+            c.save()
+            buffer.seek(0)
+            return buffer.getvalue()
+        except Exception:
+            # 兜底：返回空字节
+            return b""
+
+    col_left, col_right = st.columns([0.35, 0.65])
     with col_left:
         if st.button("生成AI宏观分析", type="primary", use_container_width=True):
             st.session_state.ai_request = True
+    with col_right:
+        if st.session_state.get("ai_report"):
+            safe_text = clean_text_for_pdf(st.session_state.ai_report)
+            pdf_bytes = build_pdf_bytes(safe_text, title="AI宏观分析报告")
+            st.download_button(
+                "下载PDF报告",
+                data=pdf_bytes,
+                file_name=f"macro_report_{df_all.index[-1].strftime('%Y-%m-%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=False
+            )
+        else:
+            st.download_button(
+                "下载PDF报告",
+                data=b"",
+                file_name="macro_report.pdf",
+                mime="application/pdf",
+                use_container_width=False,
+                disabled=True
+            )
 
     if st.session_state.get("ai_request"):
         with st.spinner("🤖 正在生成宏观研究报告..."):
-            tga_val = df_all['WTREGEN'].iloc[-1]
-            context = f"""
-            [系统时间]: {df_all.index[-1].strftime('%Y-%m-%d')}
-            [宏观综合得分]: {total_score:.1f} / 100 (周变动: {total_chg:+.1f})
-            [分模块详情]:
-            1. 流动性 (Module A): 得分 {score_a:.1f} | TGA: {tga_val:.1f} | RRP: {df_all['RRPONTSYD'].iloc[-1]:.1f}
-            2. 资金面 (Module B): 得分 {score_b:.1f} | SOFR: {df_all['SOFR'].iloc[-1]}%
-            3. 国债 (Module C): 得分 {score_c:.1f} | 10Y-2Y: {df_all['T10Y2Y'].iloc[-1]} bps
-            4. 实利 (Module D): 得分 {score_d:.1f} | 10Y实际利率: {df_all['DFII10'].iloc[-1]}%
-            5. 外部 (Module E): 得分 {score_e:.1f} | DXY变动: {df_e['Chg_DXY'].iloc[-1]:.2%}
-            6. 信用压力 (Module F): 得分 {score_f:.1f} | HY Spread: {df_f['HY_Spread'].iloc[-1]:.2f}% | BAA-10Y: {df_f['BAA10Y'].iloc[-1]:.2f}%
-            7. 风险偏好 (Module G): 得分 {score_g:.1f} | VIX: {df_g['VIX'].iloc[-1]:.1f} | VIX/VXV: {df_g['VIX_VXV'].iloc[-1]:.2f}
-            """
-            
+            # ---------- build structured AI context ----------
+            def safe_hist_value(series, days_back):
+                try:
+                    target = series.index[-1] - pd.Timedelta(days=days_back)
+                    idx = series.index.get_indexer([target], method='nearest')[0]
+                    return float(series.iloc[idx])
+                except Exception:
+                    return float(series.iloc[-1])
+
+            def classify_regime(val):
+                if val < 30: return "Crisis"
+                if val < 45: return "Weak"
+                if val < 60: return "Neutral"
+                return "Strong"
+
+            def find_similar_periods(series, band=2.0, min_gap=90):
+                if series is None or series.empty:
+                    return []
+                latest = series.iloc[-1]
+                hits = series[(series >= latest - band) & (series <= latest + band)]
+                hits = hits[hits.index <= (series.index[-1] - pd.Timedelta(days=min_gap))]
+                return [d.strftime('%Y-%m-%d') for d in hits.tail(3).index]
+
+            def forward_returns(prices, anchor_dates, horizon_days=63):
+                if prices is None or prices.empty:
+                    return []
+                out = []
+                for d in anchor_dates:
+                    try:
+                        anchor = prices.loc[:d].iloc[-1]
+                        future = prices.loc[d:].iloc[:horizon_days].iloc[-1]
+                        out.append(float((future / anchor - 1) * 100))
+                    except Exception:
+                        continue
+                return out
+
+            def percentile_rank(series, value):
+                try:
+                    return float(series.rank(pct=True).iloc[-1] * 100)
+                except Exception:
+                    return 50.0
+
+            def identify_top_drivers(mod):
+                if mod == "A":
+                    return [
+                        f"TGA {tga_val_check:.0f}B",
+                        f"RRP {df_all['RRPONTSYD'].iloc[-1]:.1f}B",
+                        f"NetLiqAdj {df_a['Score_NetLiq_Adj'].iloc[-1]:.1f}"
+                    ]
+                if mod == "B":
+                    return [
+                        f"SOFR {df_all['SOFR'].iloc[-1]:.2f}",
+                        f"IORB {df_all['IORB'].iloc[-1]:.2f}",
+                        f"SRF {df_all['RPONTSYD'].iloc[-1]:.1f}B"
+                    ]
+                if mod == "C":
+                    return [
+                        f"10Y-2Y {df_all['T10Y2Y'].iloc[-1]:.2f}",
+                        f"10Y {df_all['DGS10'].iloc[-1]:.2f}",
+                        f"Penalty {df_c['Penalty_Factor'].iloc[-1]:.1f}x"
+                    ]
+                if mod == "D":
+                    return [
+                        f"10Y Real {df_all['DFII10'].iloc[-1]:.2f}",
+                        f"Breakeven {df_all['T10YIE'].iloc[-1]:.2f}"
+                    ]
+                if mod == "E":
+                    return [
+                        f"DXY chg {df_e['Chg_DXY'].iloc[-1]:.2%}",
+                        f"Oil chg {df_e['Chg_Oil'].iloc[-1]:.2%}"
+                    ]
+                if mod == "F":
+                    return [
+                        f"HY {df_f['HY_Spread'].iloc[-1]:.2f}%",
+                        f"BAA10Y {df_f['BAA10Y'].iloc[-1]:.2f}%"
+                    ] if not df_f.empty else ["data limited"]
+                if mod == "G":
+                    return [
+                        f"VIX {vix_now:.1f}",
+                        f"VIX/VXV {term_now:.2f}",
+                        f"SPX mom {df_g['Score_Mom'].iloc[-1]:.1f}" if not df_g.empty else "SPX mom n/a"
+                    ]
+                return []
+
+            total_series = s_total_hist.reindex(df_all.index, method='ffill').dropna() if 's_total_hist' in locals() else pd.Series(dtype=float)
+            total_now = float(total_series.iloc[-1]) if not total_series.empty else total_score
+            total_1m = safe_hist_value(total_series, 30) if not total_series.empty else total_score
+            total_3m = safe_hist_value(total_series, 90) if not total_series.empty else total_score
+            total_1y = safe_hist_value(total_series, 365) if not total_series.empty else total_score
+
+            spx = df_all['SP500'].dropna() if 'SP500' in df_all.columns else pd.Series(dtype=float)
+            similar_dates = find_similar_periods(total_series)
+            fwd_3m = forward_returns(spx, similar_dates, 63)
+
+            context_obj = {
+                "summary": {
+                    "overall_score": round(total_now, 1),
+                    "vs_1m": round(total_now - total_1m, 1),
+                    "vs_3m": round(total_now - total_3m, 1),
+                    "vs_1y": round(total_now - total_1y, 1)
+                },
+                "module_breakdown": [
+                    {
+                        "name": "Liquidity (A)",
+                        "score": round(float(score_a), 1),
+                        "key_drivers": identify_top_drivers("A"),
+                        "historical_context": f"Score pct {percentile_rank(df_a['Total_Score'], score_a):.0f}"
+                    },
+                    {
+                        "name": "Funding (B)",
+                        "score": round(float(score_b), 1),
+                        "key_drivers": identify_top_drivers("B"),
+                        "historical_context": f"Score pct {percentile_rank(df_b['Total_Score'], score_b):.0f}"
+                    },
+                    {
+                        "name": "Yield Curve (C)",
+                        "score": round(float(score_c), 1),
+                        "key_drivers": identify_top_drivers("C"),
+                        "historical_context": f"Score pct {percentile_rank(df_c['Total_Score'], score_c):.0f}"
+                    },
+                    {
+                        "name": "Real Rates (D)",
+                        "score": round(float(score_d), 1),
+                        "key_drivers": identify_top_drivers("D"),
+                        "historical_context": f"Score pct {percentile_rank(df_d['Total_Score'], score_d):.0f}"
+                    },
+                    {
+                        "name": "External (E)",
+                        "score": round(float(score_e), 1),
+                        "key_drivers": identify_top_drivers("E"),
+                        "historical_context": f"Score pct {percentile_rank(df_e['Total_Score'], score_e):.0f}"
+                    },
+                    {
+                        "name": "Credit (F)",
+                        "score": round(float(score_f), 1),
+                        "key_drivers": identify_top_drivers("F"),
+                        "historical_context": f"Score pct {percentile_rank(df_f['Total_Score'], score_f):.0f}" if not df_f.empty else "n/a"
+                    },
+                    {
+                        "name": "Risk Appetite (G)",
+                        "score": round(float(score_g), 1),
+                        "key_drivers": identify_top_drivers("G"),
+                        "historical_context": f"Score pct {percentile_rank(df_g['Total_Score'], score_g):.0f}" if not df_g.empty else "n/a"
+                    }
+                ],
+                "regime_analysis": {
+                    "current": classify_regime(total_now),
+                    "last_similar": similar_dates,
+                    "what_happened_next": f"SPX 3M fwd returns: {', '.join([f'{x:.1f}%' for x in fwd_3m])}" if fwd_3m else "Not enough history"
+                },
+                "cross_asset_implications": {
+                    "equities": "High real rates + inverted curve → Bearish",
+                    "bonds": "Rising TGA + falling RRP → Duration risk",
+                    "commodities": "Strong USD + energy spike → Mixed"
+                }
+            }
+
             prompt = f"""
-            你是一位顶级宏观对冲基金策略师。请基于以下数据写一份【Deep Research 市场分析报告】。
-            {context}
-            要求：
-            1. 核心观点 (The One Thing)：一句话定义当前宏观环境。
-            2. 风险雷达：指出最危险的1-3个因子。
-            3. 资产配置建议：对美债、美股、黄金、BTC给出建议。
-            4. 风格：专业、犀利、数据驱动。
+            你是一位顶级宏观策略师。基于以下结构化数据写一份Deep Research 市场分析报告:
+            {json.dumps(context_obj, ensure_ascii=False, indent=2)}
+
+            请提供:
+            1. 当前宏观环境定性 (1句话)
+            2. 核心驱动因素分析 (Top 3)
+            3. 历史相似情境对比
+            4. 资产配置建议 (股/债/商品/现金/BTC)
+            5. 关键风险点及触发条件
+            6. 风格：专业、犀利、数据驱动
             """
             
             st.session_state.ai_report = call_gemini_new_sdk(prompt, GEMINI_API_KEY)
