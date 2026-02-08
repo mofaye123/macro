@@ -752,6 +752,21 @@ def render_dashboard_standalone(df_all):
         txt = txt.replace("\r\n", "\n")
         return txt
 
+    def normalize_report_date(raw_text: str, cutoff_date: str) -> str:
+        if not raw_text:
+            return raw_text
+        lines = [ln.rstrip() for ln in raw_text.splitlines()]
+        kept = []
+        for ln in lines:
+            if re.search(r"(报告日期|发布日期)\s*[:：]", ln):
+                continue
+            kept.append(ln)
+        body = "\n".join(kept).lstrip()
+        header = f"报告日期（数据截止）: {cutoff_date}"
+        if body.startswith(header):
+            return body
+        return f"{header}\n\n{body}"
+
     def build_pdf_bytes(text: str, title: str = "AI宏观分析报告") -> bytes:
         try:
             from reportlab.pdfgen import canvas
@@ -904,7 +919,13 @@ def render_dashboard_standalone(df_all):
             similar_dates = find_similar_periods(total_series)
             fwd_3m = forward_returns(spx, similar_dates, 63)
 
+            report_cutoff_date = df_all.index[-1].strftime('%Y-%m-%d')
+            report_cutoff_month = df_all.index[-1].strftime('%Y年%m月')
             context_obj = {
+                "meta": {
+                    "data_cutoff_date": report_cutoff_date,
+                    "data_cutoff_month": report_cutoff_month,
+                },
                 "summary": {
                     "overall_score": round(total_now, 1),
                     "vs_1m": round(total_now - total_1m, 1),
@@ -971,6 +992,12 @@ def render_dashboard_standalone(df_all):
             你是一位顶级宏观策略师。基于以下结构化数据写一份Deep Research 市场分析报告:
             {json.dumps(context_obj, ensure_ascii=False, indent=2)}
 
+            强约束:
+            1. 报告日期必须使用数据截止日：{report_cutoff_date}
+            2. 如果你写月度表达，只能写：{report_cutoff_month}
+            3. 不允许自行推断或虚构其它日期
+            4. 报告第一行必须是：报告日期（数据截止）: {report_cutoff_date}
+
             请提供:
             1. 当前宏观环境定性 (1句话)
             2. 核心驱动因素分析 (Top 3)
@@ -979,11 +1006,14 @@ def render_dashboard_standalone(df_all):
             5. 关键风险点及触发条件
             6. 风格：专业、犀利、数据驱动
             """
-            
-            st.session_state.ai_report = call_gemini_new_sdk(prompt, GEMINI_API_KEY)
+
+            raw_ai_report = call_gemini_new_sdk(prompt, GEMINI_API_KEY)
+            st.session_state.ai_report = normalize_report_date(raw_ai_report, report_cutoff_date)
         st.session_state.ai_request = False
 
     if st.session_state.ai_report:
+        render_cutoff_date = df_all.index[-1].strftime('%Y-%m-%d')
+        st.session_state.ai_report = normalize_report_date(st.session_state.ai_report, render_cutoff_date)
         st.markdown(
             f"""
             <div class="ai-report-container">
