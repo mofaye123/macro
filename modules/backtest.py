@@ -504,7 +504,7 @@ def run_strategy_logic(
     macro_lag_days=0,
     one_way_cost_bps=0.0,
     risk_free_rate=0.04,
-    max_leverage=1.5,
+    max_leverage=2.0,
     strategy_cfg=None,
     allow_short=False,
     short_leverage=0.5,
@@ -677,7 +677,7 @@ def run_strategy_logic(
     target_long = pd.Series(trend_target, index=df.index).clip(0.0, max_leverage)
     is_eth = any(k in asset_name for k in ['ETH', 'Ethereum'])
     eth_shock_enabled = bool(cfg.get('eth_shock_enabled', False)) and is_eth
-    eth_shock_drop_pct = abs(float(cfg.get('eth_shock_drop_pct', 0.08)))
+    eth_shock_drop_pct = abs(float(cfg.get('eth_shock_drop_pct', 0.135)))
     eth_shock_retain_ratio = float(np.clip(float(cfg.get('eth_shock_retain_ratio', 0.50)), 0.0, 1.0))
     eth_shock_trigger = (df[price_col].pct_change().fillna(0.0) <= -eth_shock_drop_pct).fillna(False)
     if eth_shock_enabled:
@@ -1068,7 +1068,7 @@ def render_backtest(df_all):
     with p3:
         cost_scale = float(st.slider("交易成本系数", min_value=0.5, max_value=2.0, value=1.0, step=0.1, help="按比例放大/缩小基础单边费率。1.0=默认，1.5=成本增加50%，0.8=成本降低20%。"))
     with p4:
-        max_leverage = float(st.slider("最大杠杆", min_value=1.0, max_value=2.0, value=1.5, step=0.1))
+        max_leverage = float(st.slider("最大杠杆", min_value=1.0, max_value=2.0, value=2.0, step=0.1))
     with p5:
         leverage_follow_allocation = st.checkbox("杠杆联动仓位档", value=True, help="开启后，最大杠杆变化会按比例联动所有仓位档位与底仓。")
 
@@ -1078,7 +1078,7 @@ def render_backtest(df_all):
         with e1:
             eth_shock_enabled = st.checkbox("启用ETH单日急跌减仓", value=True)
         with e2:
-            eth_shock_drop_pct = float(st.slider("ETH急跌阈值(%)", min_value=3.0, max_value=20.0, value=8.0, step=0.5))
+            eth_shock_drop_pct = float(st.slider("ETH急跌阈值(%)", min_value=3.0, max_value=20.0, value=13.5, step=0.5))
         with e3:
             eth_shock_retain_ratio = float(st.slider("触发后多头保留比例", min_value=0.0, max_value=1.0, value=0.5, step=0.05))
         with e4:
