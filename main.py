@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 
 # 1. 导入配置和数据引擎
-from config import API_KEY, GEMINI_API_KEY, SERIES_IDS, CSS_STYLE
+from config import API_KEY,GEMINI_API_KEY, SERIES_IDS, CSS_STYLE
 from data_engine import get_mixed_data
 
 # 2. 导入各个业务模块
@@ -16,6 +16,7 @@ from modules.module_d import render_module_d
 from modules.module_e import render_module_e
 from modules.module_f import render_module_f
 from modules.module_g import render_module_g
+from modules.backtest import render_backtest
 
 # ==========================================
 # 页面初始化
@@ -43,7 +44,7 @@ if not df_all.empty:
         ("E. 外部冲击与汇率", "module_e"),
         ("F. 信用压力", "module_f"),
         ("G. 风险偏好", "module_g"),
-        
+        ("量化回测", "backtest"),
     ]
     nav_labels = [n[0] for n in nav_items]
     nav_slug_map = {n[0]: n[1] for n in nav_items}
@@ -105,5 +106,7 @@ if not df_all.empty:
         render_module_f(df_all)
     elif nav_choice == "G. 风险偏好":
         render_module_g(df_all)
+    elif nav_choice == "量化回测":
+        render_backtest(df_all)
 else:
     st.error("数据加载失败，请检查网络或 API Key。")
