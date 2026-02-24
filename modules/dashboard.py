@@ -9,6 +9,7 @@ import html
 import textwrap
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import yfinance as yf
 from config import GEMINI_API_KEY
 from google import genai
 
@@ -135,6 +136,74 @@ PROFESSIONAL_LIGHT_CSS = """
     code { background: transparent !important; color: inherit !important; padding: 0 !important; }
 </style>
 """
+
+
+@st.cache_data(ttl=300)
+def _get_rt_market_snapshot():
+    """
+    拉取跨资产实时快照（Yahoo，通常有15~20分钟延迟）
+    """
+    tickers = [
+        "ZN=F", "ZB=F",      # UST Futures
+        "^FVX", "^TNX", "^TYX",  # 5Y/10Y/30Y yields (*10)
+        "^GSPC", "^IXIC",    # equity index
+        "LQD", "HYG", "JNK", # credit
+        "GLD", "DX-Y.NYB", "JPY=X"  # gold / dxy / usdjpy
+    ]
+    raw = yf.download(
+        tickers=tickers,
+        period="40d",
+        interval="1d",
+        auto_adjust=False,
+        progress=False,
+        threads=False
+    )
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    if isinstance(raw.columns, pd.MultiIndex):
+        if "Close" not in raw.columns.levels[0]:
+            return pd.DataFrame()
+        close_df = raw["Close"].copy()
+    else:
+        if "Close" not in raw.columns:
+            return pd.DataFrame()
+        close_df = raw[["Close"]].copy()
+        close_df.columns = [tickers[0]]
+    if hasattr(close_df.index, "tz") and close_df.index.tz is not None:
+        close_df.index = close_df.index.tz_localize(None)
+    return close_df.sort_index()
+
+
+def _last_pct_chg(series):
+    s = series.dropna()
+    if len(s) < 2:
+        return np.nan, np.nan
+    last = float(s.iloc[-1])
+    prev = float(s.iloc[-2])
+    pct = np.nan if prev == 0 else (last / prev - 1.0) * 100.0
+    return last, pct
+
+
+def _last_diff(series, scale=1.0):
+    s = series.dropna()
+    if len(s) < 2:
+        return np.nan, np.nan
+    last = float(s.iloc[-1]) * scale
+    prev = float(s.iloc[-2]) * scale
+    return last, last - prev
+
+
+def _fmt_rt_num(v, digits=2, suffix=""):
+    if pd.isna(v):
+        return "-"
+    return f"{v:.{digits}f}{suffix}"
+
+
+def _fmt_rt_delta(v, digits=2, suffix=""):
+    if pd.isna(v):
+        return "-"
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{v:.{digits}f}{suffix}"
 
 # ==========================================
 # Dashboard 逻辑
@@ -588,8 +657,528 @@ def render_dashboard_standalone(df_all):
     c6, c7, c8, c9, c10 = st.columns(5)
     with c6: st.markdown(create_card_html("F", "信用压力", "Credit", score_f, chg_f, "7.5%", desc_f, link="?nav=module_f"), unsafe_allow_html=True)
     with c7: st.markdown(create_card_html("G", "风险偏好", "Risk", score_g, chg_g, "7.5%", desc_g, link="?nav=module_g"), unsafe_allow_html=True)
+
     # --------------------------------------------------------
-    # 5. 参考图表 (TGA/SOFR联动 & 真理检验)
+    # 5. Top Score Lift / Drag（主要改善与拖累）
+    # --------------------------------------------------------
+    def _collect_factor_delta(factors, label, series, module_weight, bucket):
+        if series is None:
+            return
+        s = pd.Series(series).dropna()
+        if s.shape[0] < 2:
+            return
+        now = float(s.iloc[-1]) * module_weight
+        prev = float(prev_week_value(s)) * module_weight
+        factors.append({"name": label, "delta": now - prev, "bucket": bucket})
+
+    factor_deltas = []
+
+    # A 模块分解
+    _collect_factor_delta(
+        factor_deltas,
+        "Net Liquidity",
+        df_a['Score_NetLiq_Adj'] * 0.45 * df_a['TGA_Penalty_Total'],
+        0.20,
+        "Flow"
+    )
+    _collect_factor_delta(factor_deltas, "TGA", df_a['Score_TGA'] * 0.20 * df_a['TGA_Penalty_Total'], 0.20, "Flow")
+    _collect_factor_delta(factor_deltas, "ON RRP", df_a['Score_RRP'] * 0.25 * df_a['TGA_Penalty_Total'], 0.20, "Flow")
+    _collect_factor_delta(factor_deltas, "Reserves", df_a['Score_Reserves'] * 0.10 * df_a['TGA_Penalty_Total'], 0.20, "Level")
+    _collect_factor_delta(
+        factor_deltas,
+        "TGA Penalty",
+        (
+            (df_a['Score_NetLiq_Adj'] * 0.45 + df_a['Score_TGA'] * 0.20 + df_a['Score_RRP'] * 0.25 + df_a['Score_Reserves'] * 0.10)
+            * (df_a['TGA_Penalty_Total'] - 1.0)
+        ),
+        0.20,
+        "Penalty"
+    )
+    _collect_factor_delta(
+        factor_deltas,
+        "Sink Penalty",
+        (
+            (df_a['Score_NetLiq_Adj'] - df_a['Score_NetLiq']) * 0.45 * df_a['TGA_Penalty_Total']
+        ),
+        0.20,
+        "Penalty"
+    )
+
+    # B 模块分解
+    b_res = 1 - df_b['SRF_Weight']
+    _collect_factor_delta(factor_deltas, "SOFR Policy", df_b['Score_Policy'] * 0.40, 0.20, "Level")
+    _collect_factor_delta(factor_deltas, "F1 Friction", df_b['Score_F1'] * b_res * 0.40 * 0.60, 0.20, "Flow")
+    _collect_factor_delta(factor_deltas, "F2 Friction", df_b['Score_F2'] * b_res * 0.30 * 0.60, 0.20, "Flow")
+    _collect_factor_delta(factor_deltas, "F3 Friction", df_b['Score_F3'] * b_res * 0.30 * 0.60, 0.20, "Flow")
+    _collect_factor_delta(factor_deltas, "SRF", df_b['Score_SRF'] * df_b['SRF_Weight'] * 0.60, 0.20, "Penalty")
+
+    # C 模块分解
+    _collect_factor_delta(factor_deltas, "10Y Nominal Rate", df_c['Score_10Y'] * 0.20, 0.15, "Level")
+    _collect_factor_delta(factor_deltas, "2Y Rate", df_c['Score_2Y'] * 0.10, 0.15, "Level")
+    _collect_factor_delta(factor_deltas, "30Y Rate", df_c['Score_30Y'] * 0.10, 0.15, "Level")
+    _collect_factor_delta(factor_deltas, "2s10s Curve", df_c['Score_Curve_2s10s'] * 0.30, 0.15, "Flow")
+    _collect_factor_delta(factor_deltas, "3m10s Curve", df_c['Score_Curve_3m10s'] * 0.30, 0.15, "Flow")
+    _collect_factor_delta(
+        factor_deltas,
+        "Curve Penalty",
+        df_c['Total_Score'] - df_c['Total_Score1'],
+        0.15,
+        "Penalty"
+    )
+
+    # D 模块分解
+    _collect_factor_delta(factor_deltas, "10Y Real Rate", df_d['Score_Real_10Y'] * 0.40, 0.15, "Level")
+    _collect_factor_delta(factor_deltas, "5Y Real Rate", df_d['Score_Real_5Y'] * 0.30, 0.15, "Level")
+    _collect_factor_delta(factor_deltas, "10Y Breakeven", df_d['Score_Breakeven'] * 0.30, 0.15, "Flow")
+
+    # E 模块分解
+    _collect_factor_delta(factor_deltas, "DXY", df_e['Score_DXY'] * 0.20, 0.15, "Flow")
+    _collect_factor_delta(factor_deltas, "Broad USD", df_e['Score_USD'] * 0.20, 0.15, "Flow")
+    _collect_factor_delta(factor_deltas, "Yen/Carry", df_e['Score_Yen_Total'] * 0.30, 0.15, "Flow")
+    _collect_factor_delta(factor_deltas, "Energy", df_e['Score_Energy'] * 0.30, 0.15, "Flow")
+
+    # F/G 模块分解
+    if not df_f.empty:
+        _collect_factor_delta(factor_deltas, "HY Credit", df_f['Score_HY_Level'] * 0.50, 0.075, "Level")
+        _collect_factor_delta(factor_deltas, "BAA10Y", df_f['Score_BAA_Level'] * 0.20, 0.075, "Level")
+        _collect_factor_delta(factor_deltas, "HY Trend", df_f['Score_HY_Trend'] * 0.30, 0.075, "Flow")
+    if not df_g.empty:
+        _collect_factor_delta(factor_deltas, "VIX", df_g['Score_VIX'] * 0.30, 0.075, "Level")
+        _collect_factor_delta(factor_deltas, "VIX/VXV", df_g['Score_Term'] * 0.40, 0.075, "Level")
+        _collect_factor_delta(factor_deltas, "Risk vs Safe", df_g['Score_Mom'] * 0.30, 0.075, "Flow")
+
+    section_header("Top Score Lift / Drag")
+
+    if factor_deltas:
+        factor_delta_df = pd.DataFrame(factor_deltas)
+        lifts = factor_delta_df[factor_delta_df["delta"] > 0].sort_values("delta", ascending=False).head(3)
+        drags = factor_delta_df[factor_delta_df["delta"] < 0].sort_values("delta", ascending=True).head(3)
+        bucket_delta = factor_delta_df.groupby("bucket")["delta"].sum().reindex(["Level", "Flow", "Penalty"]).fillna(0.0)
+        level_delta = float(bucket_delta["Level"])
+        flow_delta = float(bucket_delta["Flow"])
+        penalty_delta = float(bucket_delta["Penalty"])
+        structural_delta = level_delta + penalty_delta
+        driver_text = "结构性变化主导" if abs(structural_delta) >= abs(flow_delta) else "短期波动主导"
+
+        c_lift, c_drag = st.columns(2)
+        with c_lift:
+            rows = "".join(
+                [
+                    f"""<div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px dashed #f3f4f6;">
+                    <span style="color:#111827;">{r['name']}</span>
+                    <span style="color:#16a34a; font-weight:700;">▲ {abs(r['delta']):.1f} pts</span>
+                    </div>"""
+                    for _, r in lifts.iterrows()
+                ]
+            ) if not lifts.empty else """<div class="text-dim" style="padding:12px 0;">本周暂无明显正向抬升。</div>"""
+
+            st.markdown(
+                f"""<div class="term-card" style="padding:18px;">
+                <div style="font-size:30px; font-weight:800; color:#16a34a; line-height:1;">↗</div>
+                <div style="font-size:24px; font-weight:800; color:#111827; margin-top:2px;">Score Lift</div>
+                <div class="text-dim" style="margin-bottom:6px;">改善总分</div>
+                {rows}
+                </div>""",
+                unsafe_allow_html=True
+            )
+
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            st.markdown(
+                f"""<div class="term-card" style="padding:14px; margin-top:-6px;">
+                <div class="text-dim">Level 贡献（结构）</div>
+                <div style="font-size:24px; font-weight:800; color:{'#16a34a' if level_delta >= 0 else '#dc2626'};">{level_delta:+.2f} pts</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
+        with b2:
+            st.markdown(
+                f"""<div class="term-card" style="padding:14px; margin-top:-6px;">
+                <div class="text-dim">Flow 贡献（短期）</div>
+                <div style="font-size:24px; font-weight:800; color:{'#16a34a' if flow_delta >= 0 else '#dc2626'};">{flow_delta:+.2f} pts</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
+        with b3:
+            st.markdown(
+                f"""<div class="term-card" style="padding:14px; margin-top:-6px;">
+                <div class="text-dim">Penalty 贡献（结构）</div>
+                <div style="font-size:24px; font-weight:800; color:{'#16a34a' if penalty_delta >= 0 else '#dc2626'};">{penalty_delta:+.2f} pts</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
+
+        st.markdown(
+            f"""<div class="term-card" style="padding:14px; margin-top:-10px;">
+            <div style="font-weight:700; color:#111827;">本周总分变化归因: {driver_text}</div>
+            <div class="text-dim" style="margin-top:6px;">
+            结构性变化 = Level + Penalty = <b>{structural_delta:+.2f} pts</b>；
+            短期波动 = Flow = <b>{flow_delta:+.2f} pts</b>。
+            </div>
+            </div>""",
+            unsafe_allow_html=True
+        )
+
+        with c_drag:
+            rows = "".join(
+                [
+                    f"""<div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px dashed #f3f4f6;">
+                    <span style="color:#111827;">{r['name']}</span>
+                    <span style="color:#dc2626; font-weight:700;">▼ {abs(r['delta']):.1f} pts</span>
+                    </div>"""
+                    for _, r in drags.iterrows()
+                ]
+            ) if not drags.empty else """<div class="text-dim" style="padding:12px 0;">本周暂无明显负向拖累。</div>"""
+
+            st.markdown(
+                f"""<div class="term-card" style="padding:18px;">
+                <div style="font-size:30px; font-weight:800; color:#dc2626; line-height:1;">↘</div>
+                <div style="font-size:24px; font-weight:800; color:#111827; margin-top:2px;">Score Drag</div>
+                <div class="text-dim" style="margin-bottom:6px;">拖累总分</div>
+                {rows}
+                </div>""",
+                unsafe_allow_html=True
+            )
+
+    # --------------------------------------------------------
+    # 6. 模块热力图（周频）
+    # --------------------------------------------------------
+    section_header("模块状态热力图（周频）")
+
+    base_idx = df_all.index
+    module_hist = pd.DataFrame(
+        {
+            "系统流动性": df_a["Total_Score"].reindex(base_idx, method="ffill"),
+            "资金价格/应急闸": df_b["Total_Score"].reindex(base_idx, method="ffill"),
+            "国债供给与市场功能": df_c["Total_Score"].reindex(base_idx, method="ffill"),
+            "利率预期与真实利": df_d["Total_Score"].reindex(base_idx, method="ffill"),
+            "信用与银行": (df_f["Total_Score"].reindex(base_idx, method="ffill") if not df_f.empty else pd.Series(50.0, index=base_idx)),
+            "风险偏好与波动": (df_g["Total_Score"].reindex(base_idx, method="ffill") if not df_g.empty else pd.Series(50.0, index=base_idx)),
+            "外部冲击与成本": df_e["Total_Score"].reindex(base_idx, method="ffill"),
+        },
+        index=base_idx,
+    )
+    module_weekly = module_hist.resample("W-FRI").last().dropna(how="all").tail(26)
+
+    if module_weekly.empty:
+        st.info("热力图数据不足，稍后刷新。")
+    else:
+        module_names = list(module_weekly.columns)
+        weekly_scores = module_weekly.T.values
+        heat_z = np.where(
+            weekly_scores < 33, 0,
+            np.where(weekly_scores < 55, 1, np.where(weekly_scores < 66, 2, 3))
+        )
+        week_labels = [f"W{int(ts.isocalendar().week):02d}" for ts in module_weekly.index]
+        week_idx = list(range(len(week_labels)))
+        tick_vals = [i for i in week_idx if i % 4 == 0 or i == week_idx[-1]]
+        tick_text = [week_labels[i] for i in tick_vals]
+
+        fig_heat = go.Figure(
+            data=go.Heatmap(
+                z=heat_z,
+                x=week_idx,
+                y=module_names,
+                customdata=weekly_scores,
+                colorscale=[
+                    [0.00, "#fca5a5"], [0.24, "#fca5a5"],
+                    [0.25, "#fde68a"], [0.49, "#fde68a"],
+                    [0.50, "#bbf7d0"], [0.74, "#bbf7d0"],
+                    [0.75, "#86efac"], [1.00, "#86efac"],
+                ],
+                zmin=0,
+                zmax=3,
+                showscale=False,
+                xgap=4,
+                ygap=4,
+                hovertemplate="周次: %{text}<br>模块: %{y}<br>得分: %{customdata:.1f}<extra></extra>",
+                text=np.array([week_labels for _ in module_names]),
+            )
+        )
+        fig_heat.update_layout(
+            height=410,
+            margin=dict(l=10, r=10, t=8, b=8),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(
+                tickmode="array",
+                tickvals=tick_vals,
+                ticktext=tick_text,
+                showgrid=False,
+                zeroline=False,
+                tickfont=dict(color="#9ca3af"),
+            ),
+            yaxis=dict(
+                autorange="reversed",
+                showgrid=False,
+                zeroline=False,
+                tickfont=dict(color="#6b7280", size=14),
+            ),
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+        st.markdown(
+            """<div style="display:flex; gap:22px; flex-wrap:wrap; margin-top:8px;">
+            <span style="display:inline-flex; align-items:center; gap:7px;"><span style="width:12px;height:12px;border-radius:4px;background:#fca5a5;"></span>&lt;33</span>
+            <span style="display:inline-flex; align-items:center; gap:7px;"><span style="width:12px;height:12px;border-radius:4px;background:#fde68a;"></span>33-55</span>
+            <span style="display:inline-flex; align-items:center; gap:7px;"><span style="width:12px;height:12px;border-radius:4px;background:#bbf7d0;"></span>55-66</span>
+            <span style="display:inline-flex; align-items:center; gap:7px;"><span style="width:12px;height:12px;border-radius:4px;background:#86efac;"></span>≥66</span>
+            </div>""",
+            unsafe_allow_html=True
+        )
+
+    # --------------------------------------------------------
+    # 7. Regime 看板（四象限）
+    # --------------------------------------------------------
+    section_header("Regime 看板（复苏 / 过热 / 滞胀 / 放缓）")
+    reg = ensure_df(df_all, ["INDPRO", "PCEPILFE"]).copy()
+    if reg.empty:
+        st.info("Regime 数据不足（需要 INDPRO/PCEPILFE）。")
+    else:
+        reg_m = reg.resample("M").last()
+        reg_m["Growth_YoY"] = reg_m["INDPRO"].pct_change(12) * 100
+        reg_m["CorePCE_YoY"] = reg_m["PCEPILFE"].pct_change(12) * 100
+        g_mean = reg_m["Growth_YoY"].rolling(60, min_periods=12).mean()
+        g_std = reg_m["Growth_YoY"].rolling(60, min_periods=12).std().replace(0, np.nan)
+        i_mean = reg_m["CorePCE_YoY"].rolling(60, min_periods=12).mean()
+        i_std = reg_m["CorePCE_YoY"].rolling(60, min_periods=12).std().replace(0, np.nan)
+        reg_m["Growth_Z"] = (reg_m["Growth_YoY"] - g_mean) / g_std
+        reg_m["Infl_Z"] = (reg_m["CorePCE_YoY"] - i_mean) / i_std
+        reg_m = reg_m.dropna(subset=["Growth_Z", "Infl_Z"])
+
+        if reg_m.empty:
+            st.info("Regime 数据样本不足（至少需要12个月有效数据）。")
+        else:
+            reg_m["Regime"] = np.select(
+                [
+                    (reg_m["Growth_Z"] >= 0) & (reg_m["Infl_Z"] < 0),
+                    (reg_m["Growth_Z"] >= 0) & (reg_m["Infl_Z"] >= 0),
+                    (reg_m["Growth_Z"] < 0) & (reg_m["Infl_Z"] >= 0),
+                    (reg_m["Growth_Z"] < 0) & (reg_m["Infl_Z"] < 0),
+                ],
+                ["复苏", "过热", "滞胀", "放缓"],
+                default="放缓",
+            )
+            regime_code_map = {"放缓": 0, "复苏": 1, "过热": 2, "滞胀": 3}
+            reg_view = reg_m.tail(30).copy()
+            reg_view["Regime_Code"] = reg_view["Regime"].map(regime_code_map).astype(float)
+            reg_now = reg_view.iloc[-1]
+            switches = reg_view[reg_view["Regime"] != reg_view["Regime"].shift(1)]
+            if switches.shape[0] > 1:
+                sw = switches.iloc[-1]
+                sw_dt = switches.index[-1].strftime("%Y-%m")
+                reason_bits = []
+                prev_idx = reg_view.index.get_loc(switches.index[-1]) - 1
+                if prev_idx >= 0:
+                    prev_row = reg_view.iloc[prev_idx]
+                    if np.sign(sw["Growth_Z"]) != np.sign(prev_row["Growth_Z"]):
+                        reason_bits.append("增长动能穿越阈值(0)")
+                    if np.sign(sw["Infl_Z"]) != np.sign(prev_row["Infl_Z"]):
+                        reason_bits.append("通胀压力穿越阈值(0)")
+                sw_reason = " + ".join(reason_bits) if reason_bits else "增长/通胀组合发生切换"
+                sw_text = f"最近切换: {sw_dt} → {sw['Regime']}（{sw_reason}）"
+            else:
+                sw_text = "最近区间未发生象限切换。"
+
+            rc1, rc2 = st.columns([1.1, 1.9])
+            with rc1:
+                st.markdown(
+                    f"""<div class="term-card" style="padding:16px;">
+                    <div style="font-weight:800; font-size:18px; color:#111827;">当前状态: {reg_now['Regime']}</div>
+                    <div class="text-dim" style="margin-top:8px;">阈值: Growth_Z=0 / CorePCE_Z=0</div>
+                    <div style="margin-top:6px;">增长动能 Z: <b>{reg_now['Growth_Z']:+.2f}</b></div>
+                    <div style="margin-top:4px;">通胀压力 Z: <b>{reg_now['Infl_Z']:+.2f}</b></div>
+                    <div class="text-dim" style="margin-top:10px;">{sw_text}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+            with rc2:
+                fig_reg = go.Figure(
+                    data=go.Heatmap(
+                        z=[reg_view["Regime_Code"].values],
+                        x=list(range(reg_view.shape[0])),
+                        y=["Regime"],
+                        text=np.array([[d.strftime("%Y-%m") for d in reg_view.index]]),
+                        customdata=np.array([reg_view["Regime"].values]),
+                        hovertemplate="日期: %{text}<br>状态: %{customdata}<extra></extra>",
+                        colorscale=[
+                            [0.00, "#93c5fd"], [0.24, "#93c5fd"],  # 放缓
+                            [0.25, "#86efac"], [0.49, "#86efac"],  # 复苏
+                            [0.50, "#fb923c"], [0.74, "#fb923c"],  # 过热
+                            [0.75, "#fca5a5"], [1.00, "#fca5a5"],  # 滞胀
+                        ],
+                        zmin=0,
+                        zmax=3,
+                        showscale=False,
+                        xgap=3,
+                        ygap=3,
+                    )
+                )
+                tv = [i for i in range(reg_view.shape[0]) if i % 4 == 0 or i == reg_view.shape[0] - 1]
+                tt = [reg_view.index[i].strftime("%y-%m") for i in tv]
+                fig_reg.update_layout(
+                    height=170,
+                    margin=dict(l=8, r=8, t=8, b=8),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(
+                        tickmode="array",
+                        tickvals=tv,
+                        ticktext=tt,
+                        showgrid=False,
+                        zeroline=False,
+                        tickfont=dict(color="#9ca3af"),
+                    ),
+                    yaxis=dict(showgrid=False, zeroline=False, tickfont=dict(color="#6b7280")),
+                )
+                st.plotly_chart(fig_reg, use_container_width=True)
+                st.markdown(
+                    """<div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:2px;">
+                    <span style="display:inline-flex; align-items:center; gap:6px;"><span style="width:10px;height:10px;border-radius:3px;background:#86efac;"></span>复苏</span>
+                    <span style="display:inline-flex; align-items:center; gap:6px;"><span style="width:10px;height:10px;border-radius:3px;background:#fb923c;"></span>过热</span>
+                    <span style="display:inline-flex; align-items:center; gap:6px;"><span style="width:10px;height:10px;border-radius:3px;background:#fca5a5;"></span>滞胀</span>
+                    <span style="display:inline-flex; align-items:center; gap:6px;"><span style="width:10px;height:10px;border-radius:3px;background:#93c5fd;"></span>放缓</span>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
+    # --------------------------------------------------------
+    # 8. 实时市场看板（跨资产）
+    # --------------------------------------------------------
+    st.markdown("<br>", unsafe_allow_html=True)
+    section_header("实时市场看板")
+    st.caption("实时数据源: Yahoo Finance（存在延迟）。用于跟踪跨资产盘面结构，不直接覆盖模块打分。")
+
+    rt_y10_bps, rt_hyg_chg = np.nan, np.nan
+    rt = _get_rt_market_snapshot()
+    if rt.empty:
+        st.info("实时数据拉取失败，稍后刷新。")
+    else:
+        zn = rt["ZN=F"] if "ZN=F" in rt.columns else pd.Series(dtype=float)
+        zb = rt["ZB=F"] if "ZB=F" in rt.columns else pd.Series(dtype=float)
+        y5 = rt["^FVX"] if "^FVX" in rt.columns else pd.Series(dtype=float)
+        y10 = rt["^TNX"] if "^TNX" in rt.columns else pd.Series(dtype=float)
+        y30 = rt["^TYX"] if "^TYX" in rt.columns else pd.Series(dtype=float)
+        spx_rt = rt["^GSPC"] if "^GSPC" in rt.columns else pd.Series(dtype=float)
+        ixic_rt = rt["^IXIC"] if "^IXIC" in rt.columns else pd.Series(dtype=float)
+        lqd_rt = rt["LQD"] if "LQD" in rt.columns else pd.Series(dtype=float)
+        hyg_rt = rt["HYG"] if "HYG" in rt.columns else pd.Series(dtype=float)
+        jnk_rt = rt["JNK"] if "JNK" in rt.columns else pd.Series(dtype=float)
+        gld_rt = rt["GLD"] if "GLD" in rt.columns else pd.Series(dtype=float)
+        dxy_rt = rt["DX-Y.NYB"] if "DX-Y.NYB" in rt.columns else pd.Series(dtype=float)
+        usdjpy_rt = rt["JPY=X"] if "JPY=X" in rt.columns else pd.Series(dtype=float)
+
+        zn_last, zn_chg = _last_pct_chg(zn)
+        zb_last, zb_chg = _last_pct_chg(zb)
+        spx_last, spx_chg = _last_pct_chg(spx_rt)
+        ixic_last, ixic_chg = _last_pct_chg(ixic_rt)
+        lqd_last, lqd_chg = _last_pct_chg(lqd_rt)
+        hyg_last, hyg_chg = _last_pct_chg(hyg_rt)
+        jnk_last, jnk_chg = _last_pct_chg(jnk_rt)
+        gld_last, gld_chg = _last_pct_chg(gld_rt)
+        dxy_last, dxy_chg = _last_pct_chg(dxy_rt)
+        usdjpy_last, usdjpy_chg = _last_pct_chg(usdjpy_rt)
+
+        y5_last, y5_diff = _last_diff(y5, scale=0.1)
+        y10_last, y10_diff = _last_diff(y10, scale=0.1)
+        y30_last, y30_diff = _last_diff(y30, scale=0.1)
+        y5_bps = y5_diff * 100.0 if pd.notna(y5_diff) else np.nan
+        y10_bps = y10_diff * 100.0 if pd.notna(y10_diff) else np.nan
+        y30_bps = y30_diff * 100.0 if pd.notna(y30_diff) else np.nan
+        rt_y10_bps = y10_bps
+        rt_hyg_chg = hyg_chg
+
+        bull_flattener = (
+            pd.notna(y30_bps) and pd.notna(y5_bps) and
+            (y30_bps < 0) and (y5_bps < 0) and
+            (abs(y30_bps) > abs(y5_bps))
+        )
+        credit_stable = (
+            pd.notna(lqd_chg) and pd.notna(hyg_chg) and pd.notna(jnk_chg) and
+            (lqd_chg >= 0) and (hyg_chg > -0.6) and (jnk_chg > -0.6)
+        )
+        no_usd_squeeze = (
+            pd.notna(dxy_chg) and pd.notna(usdjpy_chg) and
+            (abs(dxy_chg) < 0.5) and (usdjpy_chg <= 0)
+        )
+        growth_reprice = (
+            bull_flattener and pd.notna(spx_chg) and pd.notna(ixic_chg) and
+            (spx_chg < 0) and (ixic_chg < 0)
+        )
+
+        r1, r2, r3, r4 = st.columns(4)
+        with r1:
+            st.markdown(
+                f"""<div class="term-card" style="padding:16px;">
+                <div class="text-dim">债市先行动量</div>
+                <div style="font-weight:700; color:#111827;">ZN {_fmt_rt_delta(zn_chg, 2, '%')} · ZB {_fmt_rt_delta(zb_chg, 2, '%')}</div>
+                <div class="text-dim" style="margin-top:6px;">ZN {_fmt_rt_num(zn_last)} / ZB {_fmt_rt_num(zb_last)}</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
+        with r2:
+            st.markdown(
+                f"""<div class="term-card" style="padding:16px;">
+                <div class="text-dim">收益率结构</div>
+                <div style="font-weight:700; color:#111827;">30Y {_fmt_rt_delta(y30_bps, 1, 'bp')} · 5Y {_fmt_rt_delta(y5_bps, 1, 'bp')}</div>
+                <div class="text-dim" style="margin-top:6px;">{"Bull Flattener" if bull_flattener else "非Bull Flattener"}</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
+        with r3:
+            st.markdown(
+                f"""<div class="term-card" style="padding:16px;">
+                <div class="text-dim">权益表现</div>
+                <div style="font-weight:700; color:#111827;">IXIC {_fmt_rt_delta(ixic_chg, 2, '%')} · SPX {_fmt_rt_delta(spx_chg, 2, '%')}</div>
+                <div class="text-dim" style="margin-top:6px;">风格切换/补跌监测</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
+        with r4:
+            st.markdown(
+                f"""<div class="term-card" style="padding:16px;">
+                <div class="text-dim">信用与美元</div>
+                <div style="font-weight:700; color:#111827;">LQD {_fmt_rt_delta(lqd_chg, 2, '%')} · HYG {_fmt_rt_delta(hyg_chg, 2, '%')}</div>
+                <div class="text-dim" style="margin-top:6px;">DXY {_fmt_rt_delta(dxy_chg, 2, '%')} · USDJPY {_fmt_rt_delta(usdjpy_chg, 2, '%')}</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
+
+        verdicts = []
+        if growth_reprice:
+            verdicts.append("债券先行+权益回落：更像增长预期下修触发的估值重估。")
+        if credit_stable:
+            verdicts.append("信用维持稳定：暂不支持系统性信用冲击。")
+        if no_usd_squeeze:
+            verdicts.append("美元端平稳：暂不支持美元荒/全球挤兑交易。")
+        if pd.notna(gld_chg) and pd.notna(y10_bps) and (gld_chg < 0) and (y10_bps < 0):
+            verdicts.append("黄金与长端同向走弱：更偏向仓位去杠杆与流动性再分配。")
+        if not verdicts:
+            verdicts.append("当前是混合盘面，尚未形成单一高置信主线，建议等待下一交易日确认。")
+
+        st.markdown("**实时结构结论**")
+        for v in verdicts:
+            st.markdown(f"- {v}")
+
+        with st.expander("查看实时原始快照"):
+            snap = pd.DataFrame([
+                {"资产": "ZN=F", "最新": _fmt_rt_num(zn_last), "日变动": _fmt_rt_delta(zn_chg, 2, "%")},
+                {"资产": "ZB=F", "最新": _fmt_rt_num(zb_last), "日变动": _fmt_rt_delta(zb_chg, 2, "%")},
+                {"资产": "5Y收益率", "最新": _fmt_rt_num(y5_last, 2, "%"), "日变动": _fmt_rt_delta(y5_bps, 1, "bp")},
+                {"资产": "10Y收益率", "最新": _fmt_rt_num(y10_last, 2, "%"), "日变动": _fmt_rt_delta(y10_bps, 1, "bp")},
+                {"资产": "30Y收益率", "最新": _fmt_rt_num(y30_last, 2, "%"), "日变动": _fmt_rt_delta(y30_bps, 1, "bp")},
+                {"资产": "IXIC", "最新": _fmt_rt_num(ixic_last), "日变动": _fmt_rt_delta(ixic_chg, 2, "%")},
+                {"资产": "SPX", "最新": _fmt_rt_num(spx_last), "日变动": _fmt_rt_delta(spx_chg, 2, "%")},
+                {"资产": "LQD", "最新": _fmt_rt_num(lqd_last), "日变动": _fmt_rt_delta(lqd_chg, 2, "%")},
+                {"资产": "HYG", "最新": _fmt_rt_num(hyg_last), "日变动": _fmt_rt_delta(hyg_chg, 2, "%")},
+                {"资产": "JNK", "最新": _fmt_rt_num(jnk_last), "日变动": _fmt_rt_delta(jnk_chg, 2, "%")},
+                {"资产": "GLD", "最新": _fmt_rt_num(gld_last), "日变动": _fmt_rt_delta(gld_chg, 2, "%")},
+                {"资产": "DXY", "最新": _fmt_rt_num(dxy_last), "日变动": _fmt_rt_delta(dxy_chg, 2, "%")},
+                {"资产": "USDJPY", "最新": _fmt_rt_num(usdjpy_last), "日变动": _fmt_rt_delta(usdjpy_chg, 2, "%")}
+            ])
+            st.dataframe(snap, use_container_width=True, hide_index=True)
+
+    # --------------------------------------------------------
+    # 6. 参考图表 (TGA/SOFR联动 & 真理检验)
     # --------------------------------------------------------
     st.markdown("<br>", unsafe_allow_html=True)
     section_header("参考图表")
@@ -681,57 +1270,142 @@ def render_dashboard_standalone(df_all):
     # 6. 风险雷达 (Text Output)
     # --------------------------------------------------------
     section_header("风险雷达")
-    risk_factors = []
-    
-    # 逻辑判断 (原样保留)
+    risk_items = []
+    context_notes = []
+
+    def add_risk(level, title, trigger, off):
+        risk_items.append({"level": level, "title": title, "trigger": trigger, "off": off})
+
     tga_val_check = tga_curr / 1000 if tga_curr > 10000 else tga_curr
     if tga_val_check >= 800:
-        p_val, p_level = ("0.5x", "🔴") if tga_val_check >= 900 else (("0.6x", "🟠") if tga_val_check >= 850 else ("0.8x", "🟡"))
-        risk_factors.append(f"{p_level} A模块 (TGA惩罚): 流动性抽水加剧，惩罚系数 {p_val}。")
-    
+        p_val = "0.5x" if tga_val_check >= 900 else ("0.6x" if tga_val_check >= 850 else "0.8x")
+        add_risk(
+            "red" if tga_val_check >= 900 else "orange",
+            f"A模块 (TGA惩罚): 流动性抽水加剧，惩罚系数 {p_val}",
+            f"TGA 水位 {tga_val_check:.0f}B >= 800B。",
+            "TGA 重新回落至 <800B 且 4周变化转负。"
+        )
     if score_a < 40:
-        risk_factors.append(f"🔴 A模块 (流动性): 整体流动性偏紧，得分 {score_a:.1f}。")
-    
+        add_risk(
+            "red",
+            f"A模块 (流动性): 整体流动性偏紧，得分 {score_a:.1f}",
+            "A模块得分跌破 40。",
+            "A模块得分连续两周回到 >=45。"
+        )
+
     if df_all['RPONTSYD'].iloc[-1] > 10:
-        risk_factors.append("🔴 B模块 (资金面): 应急融资启动，资金压力显著上升。")
+        add_risk(
+            "red",
+            "B模块 (资金面): 应急融资启动",
+            f"SRF 使用量 {df_all['RPONTSYD'].iloc[-1]:.1f}B > 10B。",
+            "SRF 回落到 5B 以下并维持 3 个交易日。"
+        )
     elif df_all['SOFR'].iloc[-1] > df_all['IORB'].iloc[-1]:
-        risk_factors.append("🟠 B模块 (资金面): 资金价格偏贵，融资条件趋紧。")
-    
+        add_risk(
+            "orange",
+            "B模块 (资金面): 资金价格偏贵",
+            f"SOFR {df_all['SOFR'].iloc[-1]:.2f}% 高于 IORB {df_all['IORB'].iloc[-1]:.2f}%。",
+            "SOFR 回落至 IORB 下方并持续 2-3 天。"
+        )
+
     if df_c['Penalty_Factor'].iloc[-1] < 1.0:
-        risk_factors.append(f"🔴 C模块 (国债): 长端利率急涨，估值压力加剧。")
+        add_risk(
+            "red",
+            "C模块 (国债): 长端利率急涨，估值压力增加",
+            f"长端斜率惩罚触发，Penalty={df_c['Penalty_Factor'].iloc[-1]:.1f}x。",
+            "Penalty 恢复到 1.0x 且 10Y 60日斜率回到温和区间。"
+        )
     elif df_all['T10Y2Y'].iloc[-1] < -0.5:
-         risk_factors.append("🟠 C模块 (国债): 曲线深度倒挂，衰退信号增强。")
+        add_risk(
+            "orange",
+            "C模块 (国债): 曲线深度倒挂",
+            f"2s10s={df_all['T10Y2Y'].iloc[-1]:.2f} (< -0.50)。",
+            "2s10s 回升至 > -0.20 且保持。"
+        )
 
     if df_all['DFII10'].iloc[-1] > 2.0:
-        risk_factors.append("🟠 D模块 (实利): 实际利率偏高，融资环境偏紧。")
+        add_risk(
+            "orange",
+            "D模块 (实利): 实际利率偏高",
+            f"10Y 实际利率 {df_all['DFII10'].iloc[-1]:.2f}% > 2.0%。",
+            "10Y 实际利率回落至 <1.8%。"
+        )
 
     try:
-        if df_all['DEXJPUS'].pct_change(5).iloc[-1] < -0.03: 
-            risk_factors.append("🔴 E模块 (汇率): 套息交易退潮风险上升。")
-    except: pass
+        if df_all['DEXJPUS'].pct_change(5).iloc[-1] < -0.03:
+            add_risk(
+                "red",
+                "E模块 (汇率): 套息退潮风险",
+                f"USDJPY 5日变动 {df_all['DEXJPUS'].pct_change(5).iloc[-1]*100:.1f}% < -3%。",
+                "USDJPY 波动收敛且回到 -1%~+1% 区间。"
+            )
+    except Exception:
+        pass
 
     try:
-        if df_all['DCOILWTICO'].pct_change(20).iloc[-1] > 0.15: 
-            risk_factors.append("🟠 E模块 (能源): 能源价格上行，通胀压力抬头。")
-    except: pass
+        if df_all['DCOILWTICO'].pct_change(20).iloc[-1] > 0.15:
+            add_risk(
+                "orange",
+                "E模块 (能源): 通胀再抬头风险",
+                f"WTI 20日涨幅 {df_all['DCOILWTICO'].pct_change(20).iloc[-1]*100:.1f}% > 15%。",
+                "WTI 20日涨幅回落至 <8%。"
+            )
+    except Exception:
+        pass
 
-    # F/G 风险雷达补充
-    try:
-        if score_f < 40 or df_f['HY_Spread'].iloc[-1] > 6.0 or df_f['BAA10Y'].iloc[-1] > 3.0:
-            risk_factors.append("🔴 F模块 (信用): 信用压力升温，融资条件收紧。")
-    except: pass
+    if not df_f.empty and (score_f < 40 or df_f['HY_Spread'].iloc[-1] > 6.0 or df_f['BAA10Y'].iloc[-1] > 3.0):
+        add_risk(
+            "red",
+            "F模块 (信用): 信用压力升温",
+            f"HY={df_f['HY_Spread'].iloc[-1]:.2f}% / BAA10Y={df_f['BAA10Y'].iloc[-1]:.2f}%。",
+            "HY 低于 5% 且 BAA10Y 低于 2.5%。"
+        )
 
-    try:
-        if score_g < 40 or df_g['VIX'].iloc[-1] > 25 or df_g['VIX_VXV'].iloc[-1] > 1.0:
-            risk_factors.append("🔴 G模块 (风险偏好): 风险厌恶升温，情绪转弱。")
-    except: pass
+    if not df_g.empty and (score_g < 40 or df_g['VIX'].iloc[-1] > 25 or df_g['VIX_VXV'].iloc[-1] > 1.0):
+        add_risk(
+            "red",
+            "G模块 (风险偏好): 风险厌恶升温",
+            f"VIX={df_g['VIX'].iloc[-1]:.1f} / VIX/VXV={df_g['VIX_VXV'].iloc[-1]:.2f}。",
+            "VIX 回落至 20 以下且 VIX/VXV 低于 0.95。"
+        )
 
-    # 渲染雷达结果 (同样使用紧凑 HTML)
-    if not risk_factors:
-        st.markdown("""<div class="term-card" style="border-left: 4px solid #059669; background:#ecfdf5;"><div style="color:#065f46; font-weight:bold;">✅ SYSTEM NOMINAL</div><div style="color:#374151; font-size:13px; margin-top:5px;">宏观环境相对平稳。</div></div>""", unsafe_allow_html=True)
+    # 盘面验证补充（用户指定示例逻辑）
+    if pd.notna(rt_y10_bps) and pd.notna(rt_hyg_chg) and (rt_y10_bps <= -5) and (rt_hyg_chg > -0.3):
+        context_notes.append(
+            f"估值压缩但非系统信用风险: 10Y {rt_y10_bps:+.1f}bp，HYG {rt_hyg_chg:+.2f}% 未明显走扩。"
+        )
+
+    if not risk_items:
+        st.markdown(
+            """<div class="term-card" style="border-left: 4px solid #059669; background:#ecfdf5;">
+            <div style="color:#065f46; font-weight:bold;">✅ SYSTEM NOMINAL</div>
+            <div style="color:#374151; font-size:13px; margin-top:5px;">宏观环境相对平稳。</div>
+            </div>""",
+            unsafe_allow_html=True
+        )
     else:
-        risks_html = "".join([f"<div style='margin-top:8px; color:#1f2937; font-size:14px;'>{r}</div>" for r in risk_factors])
-        st.markdown(f"""<div class="term-card" style="border-left: 4px solid #dc2626; background:#fef2f2;"><div style="color:#991b1b; font-weight:bold;">⚠️ WARNING: {len(risk_factors)} CRITICAL RISKS DETECTED</div>{risks_html}</div>""", unsafe_allow_html=True)
+        level_color = {"red": "#dc2626", "orange": "#ea580c", "yellow": "#ca8a04"}
+        level_icon = {"red": "🔴", "orange": "🟠", "yellow": "🟡"}
+        critical_count = sum(1 for x in risk_items if x["level"] == "red")
+        items_html = "".join(
+            [
+                f"""<div style="margin-top:10px; padding:10px 0; border-top:1px dashed #fecaca;">
+                <div style="font-weight:700; color:{level_color.get(r['level'], '#dc2626')};">{level_icon.get(r['level'], '🔴')} {r['title']}</div>
+                <div style="color:#374151; font-size:13px; margin-top:5px;">触发条件: {r['trigger']}</div>
+                <div style="color:#6b7280; font-size:13px; margin-top:2px;">失效条件: {r['off']}</div>
+                </div>"""
+                for r in risk_items
+            ]
+        )
+        note_html = "".join([f"<div style='margin-top:6px; color:#14532d; font-size:13px;'>✅ {n}</div>" for n in context_notes])
+        st.markdown(
+            f"""<div class="term-card" style="border-left: 4px solid #dc2626; background:#fef2f2;">
+            <div style="color:#991b1b; font-weight:bold;">⚠️ WARNING: {critical_count} CRITICAL RISKS / {len(risk_items)} TOTAL</div>
+            {items_html}
+            {note_html}
+            </div>""",
+            unsafe_allow_html=True
+        )
 
     # --------------------------------------------------------
     # 7. AI 宏观分析 (风险雷达下方)
