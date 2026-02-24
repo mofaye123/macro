@@ -17,10 +17,10 @@ SERIES_IDS = {
     'DGS3': 'DGS3', 'DGS5': 'DGS5', 'DGS7': 'DGS7', 'DGS10': 'DGS10', 'DGS20': 'DGS20', 'DGS30': 'DGS30',
     'T10Y2Y': 'T10Y2Y', 'T10Y3M': 'T10Y3M',
     'DFII10': 'DFII10', 'DFII5': 'DFII5', 'T10YIE': 'T10YIE',
+    'INDPRO': 'INDPRO', 'PCEPILFE': 'PCEPILFE',
     'SP500': 'SP500',
     'CBBTCUSD': 'CBBTCUSD',
     'DTWEXBGS': 'DTWEXBGS',
-    'DTWEXAFEGS': 'DTWEXAFEGS',
     'DCOILWTICO': 'DCOILWTICO',   
     'DHHNGSP': 'DHHNGSP',         
     'DEXJPUS': 'DEXJPUS',         
@@ -30,6 +30,17 @@ SERIES_IDS = {
     'BAMLH0A0HYM2': 'BAMLH0A0HYM2', 
     'BAA10Y': 'BAA10Y',
     
+}
+
+MACRO_INDICATORS = {
+    'CPI': 'USCPI',          # 消费者物价指数
+    'Core_CPI': 'USCPIC',    # 核心CPI
+    'NFP': 'USNFP',          # 非农就业
+    'Unemployment': 'USUR',  # 失业率
+    'PCE': 'USPCE',          # PCE
+    'Fed_Rate': 'USINTR',    # 联邦利率
+    'GDP_Growth': 'USGDP',   # GDP增长率
+    'Initial_Claims': 'USIJC' # 初请失业金
 }
 
 # CSS 样式
@@ -300,6 +311,3 @@ CSS_STYLE = """
     }
 </style>
 """
-
-
-
