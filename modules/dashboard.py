@@ -1403,7 +1403,7 @@ def render_dashboard_standalone(df_all):
             <div style="color:#991b1b; font-weight:bold;">⚠️ WARNING: {critical_count} CRITICAL RISKS / {len(risk_items)} TOTAL</div>
             {items_html}
             {note_html}
-            </div>""",
+            """,
             unsafe_allow_html=True
         )
 
